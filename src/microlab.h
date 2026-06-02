@@ -13,7 +13,8 @@
 class MicroLabClass {
 public:
     void begin(uint32_t baud = 500000);
-    void update();  // call in loop()
+    void do_background_tasks();   // call in loop()
+    void update() { do_background_tasks(); }  // backward compat alias
     void flush();
     bool receive_data(const char* channel, float& out) const;
 
@@ -21,6 +22,16 @@ public:
     void syncAbsoluteTime(uint64_t time);
     unsigned long getAbsoluteTime();
     unsigned long getMissionTime();
+
+    bool controlDataArrived();
+
+    int   read(const char* topic, int   defaultValue) const;
+    float read(const char* topic, float defaultValue) const;
+
+    bool write(const char* topic, int data);
+    bool write(const char* topic, float data);
+    bool write(const char* topic, double data);
+    bool write(const char* topic, const char* data);
 
     bool send_data(const char* topic, int data);
     bool send_data(const char* topic, float data);
@@ -33,6 +44,7 @@ public:
 
     control_data_cache  _cache;
     outbound_data_cache _outbound;
+    bool _control_data_arrived;
 
 private:
     uint32_t _mission_start_ms;

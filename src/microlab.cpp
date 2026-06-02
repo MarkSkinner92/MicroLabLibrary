@@ -93,6 +93,7 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
         Serial1.print("[queue] ");
         Serial1.println(payload);
         MicroLab._cache.update_from_json(payload);
+        MicroLab._control_data_arrived = true;
     }
 }
 
@@ -100,6 +101,7 @@ void MicroLabClass::begin(uint32_t baud) {
     _mission_start_ms = to_ms_since_boot(get_absolute_time());
     _last_flush_ms    = 0;
     reset_state_machine();
+    _control_data_arrived = false;
     _cache.init();
     _outbound.init();
     Serial2.setTX(PIN_UART1_TX);
@@ -182,7 +184,7 @@ static void read_serial2_byte(uint8_t b) {
     process_incoming_byte(b);
 }
 
-void MicroLabClass::update() {
+void MicroLabClass::do_background_tasks() {
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
     bool got_bytes = Serial2.available();
     if (got_bytes) Serial1.print("[rx]");
@@ -224,6 +226,24 @@ bool MicroLabClass::receive_data(const char* channel, float& out) const {
     return _cache.fetch_value(channel, out);
 }
 
+bool MicroLabClass::controlDataArrived() {
+    if (!_control_data_arrived) return false;
+    _control_data_arrived = false;
+    return true;
+}
+
+int MicroLabClass::read(const char* topic, int defaultValue) const {
+    float val;
+    if (_cache.fetch_value(topic, val)) return (int)val;
+    return defaultValue;
+}
+
+float MicroLabClass::read(const char* topic, float defaultValue) const {
+    float val;
+    if (_cache.fetch_value(topic, val)) return val;
+    return defaultValue;
+}
+
 static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
     uint32_t t          = (uint32_t)to_ms_since_boot(get_absolute_time());
     bool abs_synced     = (absoluteTimeOffset != 0);
@@ -256,6 +276,11 @@ bool MicroLabClass::send_data(const char* topic, const char* data) {
     snprintf(suffix, sizeof(suffix), "%s,%s", topic, data);
     return outbound_add(_outbound, suffix);
 }
+
+bool MicroLabClass::write(const char* topic, int data)         { return send_data(topic, data); }
+bool MicroLabClass::write(const char* topic, float data)       { return send_data(topic, data); }
+bool MicroLabClass::write(const char* topic, double data)      { return send_data(topic, data); }
+bool MicroLabClass::write(const char* topic, const char* data) { return send_data(topic, data); }
 
 void MicroLabClass::initCamera() {
     http_send_get(Serial2, "initCamera.json");

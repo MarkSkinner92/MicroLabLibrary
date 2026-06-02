@@ -1,2 +1,0 @@
-#define HARDWARE_ID 33395D
-#define UPLOAD_PASSWORD beans
