@@ -98,6 +98,8 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
 }
 
 void MicroLabClass::begin(uint32_t baud) {
+    if (_initialized) return;
+    _initialized = true;
     _mission_start_ms = to_ms_since_boot(get_absolute_time());
     _last_flush_ms    = 0;
     reset_state_machine();
@@ -148,6 +150,7 @@ static void writeCSVOverUART(HardwareSerial& serial, const uint8_t* csv, uint16_
 }
 
 void MicroLabClass::flush() {
+    if (!_initialized) return;
     if (_outbound.count() == 0) return;
 
     // Build the full CSV payload — each get_line() call reuses the same static
@@ -185,6 +188,7 @@ static void read_serial2_byte(uint8_t b) {
 }
 
 void MicroLabClass::do_background_tasks() {
+    if (!_initialized) return;
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
     bool got_bytes = Serial2.available();
     if (got_bytes) Serial1.print("[rx]");
@@ -223,22 +227,26 @@ void MicroLabClass::do_background_tasks() {
 }
 
 bool MicroLabClass::receive_data(const char* channel, float& out) const {
+    if (!_initialized) return false;
     return _cache.fetch_value(channel, out);
 }
 
 bool MicroLabClass::controlDataArrived() {
+    if (!_initialized) return false;
     if (!_control_data_arrived) return false;
     _control_data_arrived = false;
     return true;
 }
 
 int MicroLabClass::read(const char* topic, int defaultValue) const {
+    if (!_initialized) return defaultValue;
     float val;
     if (_cache.fetch_value(topic, val)) return (int)val;
     return defaultValue;
 }
 
 float MicroLabClass::read(const char* topic, float defaultValue) const {
+    if (!_initialized) return defaultValue;
     float val;
     if (_cache.fetch_value(topic, val)) return val;
     return defaultValue;
@@ -254,24 +262,28 @@ static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
 }
 
 bool MicroLabClass::send_data(const char* topic, int data) {
+    if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%d", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
 bool MicroLabClass::send_data(const char* topic, float data) {
+    if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.6g", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
 bool MicroLabClass::send_data(const char* topic, double data) {
+    if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.10g", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
 bool MicroLabClass::send_data(const char* topic, const char* data) {
+    if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%s", topic, data);
     return outbound_add(_outbound, suffix);
@@ -283,14 +295,17 @@ bool MicroLabClass::write(const char* topic, double data)      { return send_dat
 bool MicroLabClass::write(const char* topic, const char* data) { return send_data(topic, data); }
 
 void MicroLabClass::initCamera() {
+    if (!_initialized) return;
     http_send_get(Serial2, "initCamera.json");
 }
 
 void MicroLabClass::takePicture() {
+    if (!_initialized) return;
     http_send_get(Serial2, "takePicture.json");
 }
 
 bool MicroLabClass::setCameraResolution(const char* res) {
+    if (!_initialized) return false;
     static const char* const valid[] = {
         "96x96", "QQVGA", "QCIF",  "HQVGA",  "240x240",
         "QVGA",  "CIF",   "HVGA",  "VGA",     "SVGA",

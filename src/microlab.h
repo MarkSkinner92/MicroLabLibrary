@@ -47,6 +47,7 @@ public:
     bool _control_data_arrived;
 
 private:
+    bool     _initialized = false;
     uint32_t _mission_start_ms;
     uint32_t _last_flush_ms;
 };
