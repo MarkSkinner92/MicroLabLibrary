@@ -11,6 +11,8 @@ void control_data_cache::init() {
 }
 
 void control_data_cache::update_from_json(char* json) {
+    for (uint8_t i = 0; i < _count; i++) _cache[i].received = false;
+
     json_t const* root = json_create(json, _pool, JSON_POOL_SIZE);
     if (root == NULL) return;
 
@@ -40,13 +42,13 @@ void control_data_cache::update_from_json(char* json) {
                 }
 
                 if (found >= 0) {
-                    // Overwrite existing
-                    _cache[found].value = val;
+                    _cache[found].value    = val;
+                    _cache[found].received = true;
                 } else if (_count < CACHE_MAX_ITEMS) {
-                    // Insert new
                     strncpy(_cache[_count].channel, name, CACHE_CHANNEL_LEN - 1);
                     _cache[_count].channel[CACHE_CHANNEL_LEN - 1] = '\0';
-                    _cache[_count].value = val;
+                    _cache[_count].value    = val;
+                    _cache[_count].received = true;
                     _count++;
                 }
             }
@@ -54,6 +56,14 @@ void control_data_cache::update_from_json(char* json) {
 
         outer = json_getSibling(outer);
     }
+}
+
+bool control_data_cache::was_received(const char* channel) const {
+    for (uint8_t i = 0; i < _count; i++) {
+        if (strncmp(_cache[i].channel, channel, CACHE_CHANNEL_LEN) == 0)
+            return _cache[i].received;
+    }
+    return false;
 }
 
 bool control_data_cache::fetch_value(const char* channel, float& out) const {

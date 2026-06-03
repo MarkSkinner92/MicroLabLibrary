@@ -41,6 +41,19 @@ Bytes to turn on experiment
 
 */
 
+static void read_serial2_byte(uint8_t b);
+
+// Spin-reads UART until process_command sets _camera_cmd_acked or timeout expires.
+// Used by blocking camera setup calls (initCamera, setCameraResolution).
+static bool camera_spin_wait(uint32_t timeout_ms) {
+    uint32_t t0 = to_ms_since_boot(get_absolute_time());
+    while (!MicroLab._camera_cmd_acked) {
+        while (Serial2.available()) read_serial2_byte((uint8_t)Serial2.read());
+        if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) return false;
+    }
+    return true;
+}
+
 // process_command is called by command_reader when a full packet arrives
 void process_command(uint8_t command, char* payload, uint16_t length) {
     if(command == API_RESPONSE_COMMAND){
@@ -77,7 +90,7 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
               if (year_p && month_p && day_p && hour_p && min_p && sec_p) {
                   uint64_t time_ms = date_to_unix_ms(
                       (int)json_getInteger(year_p),
-                      (int)json_getInteger(month_p) + 1,  // JSON month is 0-indexed
+                      (int)json_getInteger(month_p),
                       (int)json_getInteger(day_p),
                       (int)json_getInteger(hour_p),
                       (int)json_getInteger(min_p),
@@ -86,6 +99,14 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
                   syncAbsoluteTime(time_ms);
               }
           }
+        }
+        if (strcmp(path, "/api/initCamera.json") == 0) {
+            MicroLab._camera_initialized = true;
+            MicroLab._camera_cmd_acked   = true;
+        } else if (strcmp(path, "/api/takePicture.json") == 0) {
+            MicroLab._camera_busy = false;
+        } else if (strncmp(path, "/api/setCameraSettings.json", 27) == 0) {
+            MicroLab._camera_cmd_acked = true;
         }
     }
     else if (command == QUEUE_DATA_COMMAND){
@@ -104,6 +125,9 @@ void MicroLabClass::begin(uint32_t baud) {
     _last_flush_ms    = 0;
     reset_state_machine();
     _control_data_arrived = false;
+    _camera_initialized   = false;
+    _camera_cmd_acked     = false;
+    _camera_busy          = false;
     _cache.init();
     _outbound.init();
     Serial2.setTX(PIN_UART1_TX);
@@ -252,6 +276,11 @@ float MicroLabClass::read(const char* topic, float defaultValue) const {
     return defaultValue;
 }
 
+bool MicroLabClass::received(const char* topic) const {
+    if (!_initialized) return false;
+    return _cache.was_received(topic);
+}
+
 static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
     uint32_t t          = (uint32_t)to_ms_since_boot(get_absolute_time());
     bool abs_synced     = (absoluteTimeOffset != 0);
@@ -294,18 +323,20 @@ bool MicroLabClass::write(const char* topic, float data)       { return send_dat
 bool MicroLabClass::write(const char* topic, double data)      { return send_data(topic, data); }
 bool MicroLabClass::write(const char* topic, const char* data) { return send_data(topic, data); }
 
-void MicroLabClass::initCamera() {
-    if (!_initialized) return;
+bool MicroLabClass::initCamera() {
+    if (!_initialized || _camera_initialized) return _camera_initialized;
+    _camera_cmd_acked = false;
     http_send_get(Serial2, "initCamera.json");
-}
-
-void MicroLabClass::takePicture() {
-    if (!_initialized) return;
-    http_send_get(Serial2, "takePicture.json");
+    if (!camera_spin_wait(5000)) return false;
+    // The firmware's ssi_initCamera has its inter-step sleep_ms calls commented
+    // out, so the ack arrives before voltage rails, power-on, and register init
+    // have settled. Give the OV5640 time to stabilize before use.
+    delay(300);
+    return true;
 }
 
 bool MicroLabClass::setCameraResolution(const char* res) {
-    if (!_initialized) return false;
+    if (!_initialized || !_camera_initialized) return false;
     static const char* const valid[] = {
         "96x96", "QQVGA", "QCIF",  "HQVGA",  "240x240",
         "QVGA",  "CIF",   "HVGA",  "VGA",     "SVGA",
@@ -316,8 +347,33 @@ bool MicroLabClass::setCameraResolution(const char* res) {
         if (strcmp(res, valid[i]) == 0) { found = true; break; }
     }
     if (!found) return false;
-
+    _camera_cmd_acked = false;
     char tag[HTTP_TAG_MAX_LEN];
     snprintf(tag, sizeof(tag), "setCameraSettings.json?resolution=%s", res);
-    return http_send_get(Serial2, tag);
+    http_send_get(Serial2, tag);
+    if (!camera_spin_wait(2000)) return false;
+    // The OV5640 needs several frames for AEC/AWB to converge after a resolution
+    // change. Taking a picture immediately produces a black or underexposed frame.
+    delay(500);
+    return true;
+}
+
+bool MicroLabClass::takePicture(uint32_t timeout_ms) {
+    if (!_initialized || !_camera_initialized || _camera_busy) return false;
+    _camera_busy = true;
+    http_send_get(Serial2, "takePicture.json");
+    if (timeout_ms == 0) return true;
+    // Drain UART until the firmware response clears _camera_busy. Without this,
+    // callers in setup() (no loop) never receive the response and the camera
+    // appears permanently busy; callers in loop() must remember to poll.
+    uint32_t t0 = to_ms_since_boot(get_absolute_time());
+    while (_camera_busy) {
+        while (Serial2.available()) read_serial2_byte((uint8_t)Serial2.read());
+        if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) return false;
+    }
+    return true;
+}
+
+bool MicroLabClass::cameraReady() const {
+    return _camera_initialized && !_camera_busy;
 }

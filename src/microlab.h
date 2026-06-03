@@ -27,6 +27,7 @@ public:
 
     int   read(const char* topic, int   defaultValue) const;
     float read(const char* topic, float defaultValue) const;
+    bool  received(const char* topic) const;
 
     bool write(const char* topic, int data);
     bool write(const char* topic, float data);
@@ -38,13 +39,17 @@ public:
     bool send_data(const char* topic, double data);
     bool send_data(const char* topic, const char* data);
 
-    void initCamera();
-    void takePicture();
+    bool initCamera();
+    bool takePicture(uint32_t timeout_ms = 5000);
     bool setCameraResolution(const char* res);
+    bool cameraReady() const;
 
     control_data_cache  _cache;
     outbound_data_cache _outbound;
     bool _control_data_arrived;
+    bool _camera_initialized;
+    bool _camera_cmd_acked;
+    bool _camera_busy;
 
 private:
     bool     _initialized = false;
