@@ -107,6 +107,8 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
             MicroLab._camera_busy = false;
         } else if (strncmp(path, "/api/setCameraSettings.json", 27) == 0) {
             MicroLab._camera_cmd_acked = true;
+        } else if (strcmp(path, "/api/cameraFlash.json") == 0) {
+            MicroLab._camera_cmd_acked = true;
         }
     }
     else if (command == QUEUE_DATA_COMMAND){
@@ -230,7 +232,7 @@ void MicroLabClass::do_background_tasks() {
             while (Serial2.available()) {
                 read_serial2_byte((uint8_t)Serial2.read());
             }
-            if (to_ms_since_boot(get_absolute_time()) - t0 > 20) {
+            if (to_ms_since_boot(get_absolute_time()) - t0 > 200) {
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
                 Serial1.println(" [timeout reset]");
 #endif
@@ -358,6 +360,16 @@ bool MicroLabClass::setCameraResolution(const char* res) {
     return true;
 }
 
+bool MicroLabClass::setCameraLED(const char* mode) {
+    if (!_initialized || !_camera_initialized) return false;
+    if (strcmp(mode, "on") != 0 && strcmp(mode, "off") != 0 && strcmp(mode, "auto") != 0) return false;
+    _camera_cmd_acked = false;
+    char tag[HTTP_TAG_MAX_LEN];
+    snprintf(tag, sizeof(tag), "cameraFlash.json?mode=%s", mode);
+    http_send_get(Serial2, tag);
+    return camera_spin_wait(2000);
+}
+
 bool MicroLabClass::takePicture(uint32_t timeout_ms) {
     if (!_initialized || !_camera_initialized || _camera_busy) return false;
     _camera_busy = true;
@@ -369,7 +381,10 @@ bool MicroLabClass::takePicture(uint32_t timeout_ms) {
     uint32_t t0 = to_ms_since_boot(get_absolute_time());
     while (_camera_busy) {
         while (Serial2.available()) read_serial2_byte((uint8_t)Serial2.read());
-        if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) return false;
+        if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) {
+            _camera_busy = false;
+            return false;
+        }
     }
     return true;
 }

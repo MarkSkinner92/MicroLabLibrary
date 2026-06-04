@@ -42,6 +42,7 @@ public:
     bool initCamera();
     bool takePicture(uint32_t timeout_ms = 5000);
     bool setCameraResolution(const char* res);
+    bool setCameraLED(const char* mode);  // "on", "off", or "auto"
     bool cameraReady() const;
 
     control_data_cache  _cache;
