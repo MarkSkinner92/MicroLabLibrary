@@ -44,7 +44,7 @@ Bytes to turn on experiment
 static void read_serial2_byte(uint8_t b);
 
 // Spin-reads UART until process_command sets _camera_cmd_acked or timeout expires.
-// Used by blocking camera setup calls (initCamera, setCameraResolution).
+// Used by blocking camera setup calls (turnOnCamera, turnOffCamera, setCameraResolution).
 static bool camera_spin_wait(uint32_t timeout_ms) {
     uint32_t t0 = to_ms_since_boot(get_absolute_time());
     while (!MicroLab._camera_cmd_acked) {
@@ -102,6 +102,9 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
         }
         if (strcmp(path, "/api/initCamera.json") == 0) {
             MicroLab._camera_initialized = true;
+            MicroLab._camera_cmd_acked   = true;
+        } else if (strcmp(path, "/api/powerDownCamera.json") == 0) {
+            MicroLab._camera_initialized = false;
             MicroLab._camera_cmd_acked   = true;
         } else if (strcmp(path, "/api/takePicture.json") == 0) {
             MicroLab._camera_busy = false;
@@ -232,7 +235,7 @@ void MicroLabClass::do_background_tasks() {
             while (Serial2.available()) {
                 read_serial2_byte((uint8_t)Serial2.read());
             }
-            if (to_ms_since_boot(get_absolute_time()) - t0 > 200) {
+            if (to_ms_since_boot(get_absolute_time()) - t0 > 20) {
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
                 Serial1.println(" [timeout reset]");
 #endif
@@ -292,40 +295,35 @@ static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
     return cache.add_line(suffix, t, abs_ms, mission_ms, abs_synced, mission_synced);
 }
 
-bool MicroLabClass::send_data(const char* topic, int data) {
+bool MicroLabClass::write(const char* topic, int data) {
     if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%d", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
-bool MicroLabClass::send_data(const char* topic, float data) {
+bool MicroLabClass::write(const char* topic, float data) {
     if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.6g", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
-bool MicroLabClass::send_data(const char* topic, double data) {
+bool MicroLabClass::write(const char* topic, double data) {
     if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.10g", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
-bool MicroLabClass::send_data(const char* topic, const char* data) {
+bool MicroLabClass::write(const char* topic, const char* data) {
     if (!_initialized) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%s", topic, data);
     return outbound_add(_outbound, suffix);
 }
 
-bool MicroLabClass::write(const char* topic, int data)         { return send_data(topic, data); }
-bool MicroLabClass::write(const char* topic, float data)       { return send_data(topic, data); }
-bool MicroLabClass::write(const char* topic, double data)      { return send_data(topic, data); }
-bool MicroLabClass::write(const char* topic, const char* data) { return send_data(topic, data); }
-
-bool MicroLabClass::initCamera() {
+bool MicroLabClass::turnOnCamera() {
     if (!_initialized || _camera_initialized) return _camera_initialized;
     _camera_cmd_acked = false;
     http_send_get(Serial2, "initCamera.json");
@@ -335,6 +333,13 @@ bool MicroLabClass::initCamera() {
     // have settled. Give the OV5640 time to stabilize before use.
     delay(300);
     return true;
+}
+
+bool MicroLabClass::turnOffCamera() {
+    if (!_initialized || !_camera_initialized) return true;
+    _camera_cmd_acked = false;
+    http_send_get(Serial2, "powerDownCamera.json");
+    return camera_spin_wait(2000);
 }
 
 bool MicroLabClass::setCameraResolution(const char* res) {

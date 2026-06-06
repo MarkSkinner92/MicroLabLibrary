@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-#define OUTBOUND_CACHE_MAX_LINES 100
+#define OUTBOUND_CACHE_MAX_LINES 20
 #define OUTBOUND_LINE_MAX_LEN    128
 
 struct outbound_entry {

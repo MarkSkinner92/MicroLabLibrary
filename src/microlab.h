@@ -5,7 +5,7 @@
 // #define MICROLAB_DEBUG_FLUSH
 
 // Uncomment to hex-dump every raw byte received on Serial2 to Serial1
-#define MICROLAB_DEBUG_SERIAL2_RX
+// #define MICROLAB_DEBUG_SERIAL2_RX
 #include "command_reader.h"
 #include "control_data_cache.h"
 #include "outbound_data_cache.h"
@@ -34,12 +34,8 @@ public:
     bool write(const char* topic, double data);
     bool write(const char* topic, const char* data);
 
-    bool send_data(const char* topic, int data);
-    bool send_data(const char* topic, float data);
-    bool send_data(const char* topic, double data);
-    bool send_data(const char* topic, const char* data);
-
-    bool initCamera();
+    bool turnOnCamera();
+    bool turnOffCamera();
     bool takePicture(uint32_t timeout_ms = 5000);
     bool setCameraResolution(const char* res);
     bool setCameraLED(const char* mode);  // "on", "off", or "auto"
