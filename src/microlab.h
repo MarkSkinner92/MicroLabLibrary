@@ -16,6 +16,7 @@ public:
     void do_background_tasks();   // call in loop()
     void update() { do_background_tasks(); }  // backward compat alias
     void flush();
+    void delay(uint32_t ms);      // like ::delay() but pumps background tasks
     bool receive_data(const char* channel, float& out) const;
 
     void syncMissionTime(uint64_t time);

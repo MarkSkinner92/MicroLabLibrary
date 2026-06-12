@@ -255,6 +255,13 @@ void MicroLabClass::do_background_tasks() {
     }
 }
 
+void MicroLabClass::delay(uint32_t ms) {
+    uint32_t start = to_ms_since_boot(get_absolute_time());
+    while (to_ms_since_boot(get_absolute_time()) - start < ms) {
+        do_background_tasks();
+    }
+}
+
 bool MicroLabClass::receive_data(const char* channel, float& out) const {
     if (!_initialized) return false;
     return _cache.fetch_value(channel, out);
