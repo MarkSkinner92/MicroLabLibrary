@@ -29,7 +29,7 @@ public:
 
     HardwareSerial& serial;  // alias for Serial1 — use MicroLab.serial.print(...)
 
-    void begin(uint32_t baud = 500000);
+    void begin();
     void beginDebugSerial(uint32_t baud = 115200);
     void doBackgroundTasks();      // call in loop()
     void update() { doBackgroundTasks(); }  // backward compat alias
@@ -39,8 +39,8 @@ public:
 
     void syncMissionTime(uint64_t time);
     void syncAbsoluteTime(uint64_t time);
-    unsigned long getAbsoluteTime();
-    unsigned long getMissionTime();
+    uint64_t getAbsoluteTime();
+    uint64_t getMissionTime();
 
     bool linkToTopic(const char* topic, float&  var);
     bool linkToTopic(const char* topic, double& var);

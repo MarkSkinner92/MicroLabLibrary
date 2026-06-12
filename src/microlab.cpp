@@ -7,15 +7,20 @@
 #define PIN_UART1_TX  20
 #define PIN_UART1_RX  21
 
-#define API_RESPONSE_COMMAND 0x10
-#define QUEUE_DATA_COMMAND 0x30
+#define API_RESPONSE_COMMAND  0x10
+#define QUEUE_DATA_COMMAND    0x30
+#define MISSION_START_COMMAND 0x60
+#define MISSION_STOP_COMMAND  0x61
+#define MISSION_RESET_COMMAND 0x62
 
 MicroLabClass MicroLab;
 
 // These offsets are computed when we receive timestamps from the coprocessor
 // Use MicroLab::getMissionTime() and getAbsoluteTime(), not these offsets.
-uint64_t absoluteTimeOffset = 0; // Equal to absoluteTime - to_ms_since_boot(get_absolute_time())
-uint64_t missionTimeOffset = 0; // Equal to missionTime - to_ms_since_boot(get_absolute_time())
+uint64_t absoluteTimeOffset = 0;  // Equal to absoluteTime - to_ms_since_boot(get_absolute_time())
+uint64_t missionTimeOffset  = 0;  // Equal to missionTime  - to_ms_since_boot(get_absolute_time())
+static bool     missionRunning   = false;
+static uint64_t missionFrozenMs  = 0;
 
 void syncMissionTime(uint64_t time);
 void syncAbsoluteTime(uint64_t time);
@@ -118,6 +123,27 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
         payload[length] = '\0';
         MicroLab._cache.update_from_json(payload);
     }
+    else if (command == MISSION_START_COMMAND ||
+             command == MISSION_STOP_COMMAND  ||
+             command == MISSION_RESET_COMMAND) {
+        if (length < 4) return;
+        uint32_t ts_sec = (uint32_t)(uint8_t)payload[0]
+                        | ((uint32_t)(uint8_t)payload[1] << 8)
+                        | ((uint32_t)(uint8_t)payload[2] << 16)
+                        | ((uint32_t)(uint8_t)payload[3] << 24);
+        uint64_t ts_ms = (uint64_t)ts_sec * 1000ULL;
+
+        if (command == MISSION_START_COMMAND) {
+            syncMissionTime(ts_ms);
+            missionRunning = true;
+        } else if (command == MISSION_STOP_COMMAND) {
+            missionFrozenMs = ts_ms;
+            missionRunning  = false;
+        } else { // MISSION_RESET_COMMAND
+            missionFrozenMs = 0;
+            missionRunning  = false;
+        }
+    }
 }
 
 void MicroLabClass::beginDebugSerial(uint32_t baud) {
@@ -126,7 +152,7 @@ void MicroLabClass::beginDebugSerial(uint32_t baud) {
     Serial1.begin(baud);
 }
 
-void MicroLabClass::begin(uint32_t baud) {
+void MicroLabClass::begin() {
     if (_initialized) return;
     _initialized = true;
     _mission_start_ms = to_ms_since_boot(get_absolute_time());
@@ -140,25 +166,30 @@ void MicroLabClass::begin(uint32_t baud) {
     _outbound.init();
     Serial2.setTX(PIN_UART1_TX);
     Serial2.setRX(PIN_UART1_RX);
-    Serial2.begin(baud);
+    Serial2.begin(500000);
     while (!Serial2);
-    delay(100);
 
     // getDateRTC.json is sent after getMissionTimeRTC response arrives (see process_command)
     http_send_get(Serial2, "getDateRTC.json");
+
+    // Pump background tasks briefly so the RTC handshake completes and mission/absolute
+    // time are synced before the user's loop() starts.
+    this->delay(100);  // pumps doBackgroundTasks() — lets RTC handshake complete before loop()
 }
 
-uint64_t getMissionTime(){
+uint64_t MicroLabClass::getMissionTime(){
+  if (!missionRunning) return missionFrozenMs;
   return missionTimeOffset + (uint64_t)to_ms_since_boot(get_absolute_time());
 }
 
-uint64_t getAbsoluteTime(){
+uint64_t MicroLabClass::getAbsoluteTime(){
   return absoluteTimeOffset + (uint64_t)to_ms_since_boot(get_absolute_time());
 }
 
 void syncMissionTime(uint64_t time){
   missionTimeOffset = time - (uint64_t)to_ms_since_boot(get_absolute_time());
   MicroLab._outbound.patch_mission_times(missionTimeOffset);
+  missionRunning = true;
 }
 
 void syncAbsoluteTime(uint64_t time){
