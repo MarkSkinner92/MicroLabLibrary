@@ -1,5 +1,5 @@
 #include "command_reader.h"
-#include "microlab.h"
+#include "MicroLab.h"
 #include <Arduino.h>
 
 static char payload[PAYLOAD_BUFFER_SIZE];

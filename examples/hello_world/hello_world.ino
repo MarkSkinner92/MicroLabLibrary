@@ -1,21 +1,18 @@
-#include <microlab.h>
+#include <MicroLab.h>
 
-#define LED_BLUE  5
+int counter = 0;
 
 void setup() {
-  pinMode(LED_BLUE,  OUTPUT);
-
-  MicroLab.begin();
+    MicroLab.beginDebugSerial(115200);
+    MicroLab.begin();
 }
 
 void loop() {
-  MicroLab.do_background_tasks();
+    MicroLab.doBackgroundTasks();
 
-  // For delay times larger than 10ms, 
-  // it is important to use MicroLab.delay() instead of delay()
-  // This allows the MicroLab to do important background tasks while it's waiting.
-  digitalWrite(LED_BLUE, HIGH);
-  MicroLab.delay(1000);
-  digitalWrite(LED_BLUE, LOW);
-  MicroLab.delay(1000);
+    MicroLab.serial.print("Hello World ");
+    MicroLab.serial.println(counter);
+    counter++;
+
+    MicroLab.delay(1000);
 }

@@ -19,9 +19,6 @@ bool outbound_data_cache::add_line(const char* suffix, uint32_t raw_millis,
     e.abs_synced     = abs_synced;
     e.mission_synced = mission_synced;
     _count++;
-    Serial1.write("Outbound data cache count: ");
-    Serial1.print(_count);
-    Serial1.write('\n');
     return true;
 }
 

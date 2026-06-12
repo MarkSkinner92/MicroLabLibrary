@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <Arduino.h>
 
 // Uncomment to mirror each flush to Serial1 for debugging
 // #define MICROLAB_DEBUG_FLUSH
@@ -10,21 +11,40 @@
 #include "control_data_cache.h"
 #include "outbound_data_cache.h"
 
+#define CONTROL_LINK_MAX 8
+
+struct ControlLink {
+    const char* topic;
+    enum Type : uint8_t { FLOAT, DOUBLE, INT } type;
+    union {
+        float*  f;
+        double* d;
+        int*    i;
+    } ptr;
+};
+
 class MicroLabClass {
 public:
+    MicroLabClass() : serial(Serial1) {}
+
+    HardwareSerial& serial;  // alias for Serial1 — use MicroLab.serial.print(...)
+
     void begin(uint32_t baud = 500000);
-    void do_background_tasks();   // call in loop()
-    void update() { do_background_tasks(); }  // backward compat alias
+    void beginDebugSerial(uint32_t baud = 115200);
+    void doBackgroundTasks();      // call in loop()
+    void update() { doBackgroundTasks(); }  // backward compat alias
     void flush();
     void delay(uint32_t ms);      // like ::delay() but pumps background tasks
-    bool receive_data(const char* channel, float& out) const;
+    bool receiveData(const char* channel, double& out) const;
 
     void syncMissionTime(uint64_t time);
     void syncAbsoluteTime(uint64_t time);
     unsigned long getAbsoluteTime();
     unsigned long getMissionTime();
 
-    bool controlDataArrived();
+    bool linkToTopic(const char* topic, float&  var);
+    bool linkToTopic(const char* topic, double& var);
+    bool linkToTopic(const char* topic, int&    var);
 
     int   read(const char* topic, int   defaultValue) const;
     float read(const char* topic, float defaultValue) const;
@@ -44,15 +64,18 @@ public:
 
     control_data_cache  _cache;
     outbound_data_cache _outbound;
-    bool _control_data_arrived;
     bool _camera_initialized;
     bool _camera_cmd_acked;
     bool _camera_busy;
 
 private:
-    bool     _initialized = false;
-    uint32_t _mission_start_ms;
-    uint32_t _last_flush_ms;
+    bool        _initialized = false;
+    uint32_t    _mission_start_ms;
+    uint32_t    _last_flush_ms;
+    ControlLink _links[CONTROL_LINK_MAX];
+    uint8_t     _link_count = 0;
+
+    void _update_links();
 };
 
 extern MicroLabClass MicroLab;

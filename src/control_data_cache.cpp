@@ -30,7 +30,7 @@ void control_data_cache::update_from_json(char* json) {
                  json_getType(value_field) == JSON_TEXT)) {
 
                 const char* name = json_getValue(name_field);
-                float val = (float)atof(json_getValue(value_field));
+                double val = atof(json_getValue(value_field));
 
                 // Look for existing entry to overwrite
                 int8_t found = -1;
@@ -66,7 +66,7 @@ bool control_data_cache::was_received(const char* channel) const {
     return false;
 }
 
-bool control_data_cache::fetch_value(const char* channel, float& out) const {
+bool control_data_cache::fetch_value(const char* channel, double& out) const {
     for (uint8_t i = 0; i < _count; i++) {
         if (strncmp(_cache[i].channel, channel, CACHE_CHANNEL_LEN) == 0) {
             out = _cache[i].value;

@@ -1,4 +1,4 @@
-#include "microlab.h"
+#include "MicroLab.h"
 #include "tiny-json.h"
 #include "http_request_helper.h"
 #include <Arduino.h>
@@ -116,11 +116,14 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
     }
     else if (command == QUEUE_DATA_COMMAND){
         payload[length] = '\0';
-        Serial1.print("[queue] ");
-        Serial1.println(payload);
         MicroLab._cache.update_from_json(payload);
-        MicroLab._control_data_arrived = true;
     }
+}
+
+void MicroLabClass::beginDebugSerial(uint32_t baud) {
+    Serial1.setTX(0);
+    Serial1.setRX(1);
+    Serial1.begin(baud);
 }
 
 void MicroLabClass::begin(uint32_t baud) {
@@ -129,7 +132,7 @@ void MicroLabClass::begin(uint32_t baud) {
     _mission_start_ms = to_ms_since_boot(get_absolute_time());
     _last_flush_ms    = 0;
     reset_state_machine();
-    _control_data_arrived = false;
+    _link_count           = 0;
     _camera_initialized   = false;
     _camera_cmd_acked     = false;
     _camera_busy          = false;
@@ -156,15 +159,11 @@ uint64_t getAbsoluteTime(){
 void syncMissionTime(uint64_t time){
   missionTimeOffset = time - (uint64_t)to_ms_since_boot(get_absolute_time());
   MicroLab._outbound.patch_mission_times(missionTimeOffset);
-  Serial1.print("syncMissionTime: ");
-  Serial1.println((unsigned long long)time);
 }
 
 void syncAbsoluteTime(uint64_t time){
   absoluteTimeOffset = time - (uint64_t)to_ms_since_boot(get_absolute_time());
   MicroLab._outbound.patch_abs_times(absoluteTimeOffset);
-  Serial1.print("syncAbsoluteTime: ");
-  Serial1.println((unsigned long long)time);
 }
 
 static void writeCSVOverUART(HardwareSerial& serial, const uint8_t* csv, uint16_t csv_len) {
@@ -216,7 +215,7 @@ static void read_serial2_byte(uint8_t b) {
     process_incoming_byte(b);
 }
 
-void MicroLabClass::do_background_tasks() {
+void MicroLabClass::doBackgroundTasks() {
     if (!_initialized) return;
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
     bool got_bytes = Serial2.available();
@@ -248,6 +247,8 @@ void MicroLabClass::do_background_tasks() {
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
     if (got_bytes) Serial1.println();
 #endif
+    _update_links();
+
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (now - _last_flush_ms >= 1000) {
         _last_flush_ms = now;
@@ -258,33 +259,59 @@ void MicroLabClass::do_background_tasks() {
 void MicroLabClass::delay(uint32_t ms) {
     uint32_t start = to_ms_since_boot(get_absolute_time());
     while (to_ms_since_boot(get_absolute_time()) - start < ms) {
-        do_background_tasks();
+        doBackgroundTasks();
     }
 }
 
-bool MicroLabClass::receive_data(const char* channel, float& out) const {
+bool MicroLabClass::receiveData(const char* channel, double& out) const {
     if (!_initialized) return false;
     return _cache.fetch_value(channel, out);
 }
 
-bool MicroLabClass::controlDataArrived() {
-    if (!_initialized) return false;
-    if (!_control_data_arrived) return false;
-    _control_data_arrived = false;
+void MicroLabClass::_update_links() {
+    for (uint8_t i = 0; i < _link_count; i++) {
+        double val;
+        if (!_cache.fetch_value(_links[i].topic, val)) continue;
+        switch (_links[i].type) {
+            case ControlLink::FLOAT:  *_links[i].ptr.f = val;          break;
+            case ControlLink::DOUBLE: *_links[i].ptr.d = (double)val;  break;
+            case ControlLink::INT:    *_links[i].ptr.i = (int)val;     break;
+        }
+    }
+}
+
+bool MicroLabClass::linkToTopic(const char* topic, float& var) {
+    if (_link_count >= CONTROL_LINK_MAX) return false;
+    _links[_link_count] = { topic, ControlLink::FLOAT, {.f = &var} };
+    _link_count++;
+    return true;
+}
+
+bool MicroLabClass::linkToTopic(const char* topic, double& var) {
+    if (_link_count >= CONTROL_LINK_MAX) return false;
+    _links[_link_count] = { topic, ControlLink::DOUBLE, {.d = &var} };
+    _link_count++;
+    return true;
+}
+
+bool MicroLabClass::linkToTopic(const char* topic, int& var) {
+    if (_link_count >= CONTROL_LINK_MAX) return false;
+    _links[_link_count] = { topic, ControlLink::INT, {.i = &var} };
+    _link_count++;
     return true;
 }
 
 int MicroLabClass::read(const char* topic, int defaultValue) const {
     if (!_initialized) return defaultValue;
-    float val;
+    double val;
     if (_cache.fetch_value(topic, val)) return (int)val;
     return defaultValue;
 }
 
 float MicroLabClass::read(const char* topic, float defaultValue) const {
     if (!_initialized) return defaultValue;
-    float val;
-    if (_cache.fetch_value(topic, val)) return val;
+    double val;
+    if (_cache.fetch_value(topic, val)) return (float)val;
     return defaultValue;
 }
 
