@@ -58,10 +58,15 @@ void control_data_cache::update_from_json(char* json) {
     }
 }
 
-bool control_data_cache::was_received(const char* channel) const {
+bool control_data_cache::was_received(const char* channel) {
     for (uint8_t i = 0; i < _count; i++) {
-        if (strncmp(_cache[i].channel, channel, CACHE_CHANNEL_LEN) == 0)
-            return _cache[i].received;
+        if (strncmp(_cache[i].channel, channel, CACHE_CHANNEL_LEN) == 0) {
+            if (_cache[i].received) {
+                _cache[i].received = false;
+                return true;
+            }
+            return false;
+        }
     }
     return false;
 }

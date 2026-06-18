@@ -13,6 +13,40 @@
 #define MISSION_STOP_COMMAND  0x61
 #define MISSION_RESET_COMMAND 0x62
 
+#define HTTP_COOLDOWN_MS        1000
+#define WRITE_TOPIC_NAME_MAX_LEN  64
+
+// Minimum time between pictures, indexed by resolution (matches valid[] in setCameraResolution).
+// Cooldown is applied based on the resolution of the LAST picture taken, not the current one.
+// Tweak individual entries freely — they are independent.
+static const uint32_t PICTURE_COOLDOWN_MS[16] = {
+     3000,  //  0  96x96
+     5000,  //  1  QQVGA
+     7000,  //  2  QCIF
+    10000,  //  3  HQVGA
+    12000,  //  4  240x240
+    15000,  //  5  QVGA
+    17000,  //  6  CIF
+    20000,  //  7  HVGA
+    25000,  //  8  VGA
+    30000,  //  9  SVGA
+    35000,  // 10  XGA
+    40000,  // 11  HD
+    45000,  // 12  SXGA
+    50000,  // 13  UXGA
+    55000,  // 14  QHDA
+    60000,  // 15  WQXGA
+};
+
+// Returns false if s is NULL or contains characters that would corrupt a CSV row.
+static bool is_safe_string(const char* s) {
+    if (!s) return false;
+    for (const char* p = s; *p; p++) {
+        if (*p == ',' || *p == '\n' || *p == '\r') return false;
+    }
+    return true;
+}
+
 MicroLabClass MicroLab;
 
 // These offsets are computed when we receive timestamps from the coprocessor
@@ -37,24 +71,32 @@ static uint64_t date_to_unix_ms(int year, int month, int day, int hour, int min,
     return ((int64_t)days * 86400LL + hour * 3600 + min * 60 + sec) * 1000ULL;
 }
 
-/*
-Bytes to request mission time
-11 2C 00 47 45 54 20 2F 61 70 69 2F 67 65 74 4D 69 73 73 69 6F 6E 54 69 6D 65 52 54 43 2E 6A 73 6F 6E 20 48 54 54 50 2F 31 2E 30 0D 0A 0D 0A
-
-Bytes to turn on experiment
-11 2C 00 47 45 54 20 2F 61 70 69 2F 70 6F 77 65 72 4F 6E 45 78 70 65 72 69 6D 65 6E 74 2E 6A 73 6F 6E 20 48 54 54 50 2F 31 2E 30 0D 0A 0D 0A
-
-*/
-
 static void read_serial2_byte(uint8_t b);
 
+// Drain the UART RX buffer completely before issuing a new camera command.
+// If a packet is partially received, spin up to 20 ms to let it finish so the
+// state machine is not left stranded. Clears any stale ACK that could cause
+// camera_spin_wait to return true instantly for the wrong command.
+static void drain_uart_rx() {
+    uint32_t t0 = to_ms_since_boot(get_absolute_time());
+    do {
+        while (Serial2.available()) read_serial2_byte((uint8_t)Serial2.read());
+    } while (is_packet_in_progress() &&
+             to_ms_since_boot(get_absolute_time()) - t0 < 20);
+    if (is_packet_in_progress()) reset_state_machine();
+}
+
 // Spin-reads UART until process_command sets _camera_cmd_acked or timeout expires.
-// Used by blocking camera setup calls (turnOnCamera, turnOffCamera, setCameraResolution).
+// Resets the packet state machine on timeout so a stranded partial packet does
+// not corrupt subsequent UART communication.
 static bool camera_spin_wait(uint32_t timeout_ms) {
     uint32_t t0 = to_ms_since_boot(get_absolute_time());
     while (!MicroLab._camera_cmd_acked) {
         while (Serial2.available()) read_serial2_byte((uint8_t)Serial2.read());
-        if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) return false;
+        if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) {
+            reset_state_machine();
+            return false;
+        }
     }
     return true;
 }
@@ -159,9 +201,17 @@ void MicroLabClass::begin() {
     _last_flush_ms    = 0;
     reset_state_machine();
     _link_count           = 0;
-    _camera_initialized   = false;
-    _camera_cmd_acked     = false;
-    _camera_busy          = false;
+    _camera_initialized  = false;
+    _camera_cmd_acked    = false;
+    _camera_busy         = false;
+    _last_turn_on_ms              = 0;
+    _last_turn_off_ms             = 0;
+    _last_resolution_ms           = 0;
+    _last_led_ms                  = 0;
+    _last_picture_ms              = 0;
+    _camera_resolution_idx        = 4;  // 240x240 is the coprocessor default
+    _last_picture_resolution_idx  = 4;
+    _write_topic_count            = 0;
     _cache.init();
     _outbound.init();
     Serial2.setTX(PIN_UART1_TX);
@@ -169,12 +219,9 @@ void MicroLabClass::begin() {
     Serial2.begin(500000);
     while (!Serial2);
 
-    // getDateRTC.json is sent after getMissionTimeRTC response arrives (see process_command)
+    delay(1000); // Allows time for the flight computer to tell the coprocessor to update the mission time before we get it.
     http_send_get(Serial2, "getDateRTC.json");
-
-    // Pump background tasks briefly so the RTC handshake completes and mission/absolute
-    // time are synced before the user's loop() starts.
-    this->delay(100);  // pumps doBackgroundTasks() — lets RTC handshake complete before loop()
+    // this->delay(100);
 }
 
 uint64_t MicroLabClass::getMissionTime(){
@@ -198,13 +245,21 @@ void syncAbsoluteTime(uint64_t time){
 }
 
 static void writeCSVOverUART(HardwareSerial& serial, const uint8_t* csv, uint16_t csv_len) {
-    static const char header[] = "POST /api/sendDataToMemory.csv HTTP/1.0\r\n\r\n";
-    const uint16_t header_len  = sizeof(header) - 1;
-    const uint16_t total       = header_len + csv_len;
+    // Content-Length tells the coprocessor's HTTP handler exactly how many body
+    // bytes to read, so it stops at the end of the CSV and does not consume the
+    // framing bytes of the next HTTP request (which caused malformed SD card rows).
+    char header[80];
+    int hlen = snprintf(header, sizeof(header),
+                        "POST /api/sendDataToMemory.csv HTTP/1.0\r\n"
+                        "Content-Length: %u\r\n"
+                        "\r\n",
+                        (unsigned)csv_len);
+    if (hlen <= 0 || hlen >= (int)sizeof(header)) return;
+    const uint16_t total = (uint16_t)hlen + csv_len;
     serial.write(0x11);
     serial.write((uint8_t)(total & 0xFF));
     serial.write((uint8_t)(total >> 8));
-    serial.write((const uint8_t*)header, header_len);
+    serial.write((const uint8_t*)header, (size_t)hlen);
     serial.write(csv, csv_len);
 }
 
@@ -295,7 +350,7 @@ void MicroLabClass::delay(uint32_t ms) {
 }
 
 bool MicroLabClass::receiveData(const char* channel, double& out) const {
-    if (!_initialized) return false;
+    if (!_initialized || !channel) return false;
     return _cache.fetch_value(channel, out);
 }
 
@@ -312,43 +367,68 @@ void MicroLabClass::_update_links() {
 }
 
 bool MicroLabClass::linkToTopic(const char* topic, float& var) {
+    if (!topic) return false;
     if (_link_count >= CONTROL_LINK_MAX) return false;
-    _links[_link_count] = { topic, ControlLink::FLOAT, {.f = &var} };
+    strncpy(_links[_link_count].topic, topic, CACHE_CHANNEL_LEN - 1);
+    _links[_link_count].topic[CACHE_CHANNEL_LEN - 1] = '\0';
+    _links[_link_count].type  = ControlLink::FLOAT;
+    _links[_link_count].ptr.f = &var;
     _link_count++;
     return true;
 }
 
 bool MicroLabClass::linkToTopic(const char* topic, double& var) {
+    if (!topic) return false;
     if (_link_count >= CONTROL_LINK_MAX) return false;
-    _links[_link_count] = { topic, ControlLink::DOUBLE, {.d = &var} };
+    strncpy(_links[_link_count].topic, topic, CACHE_CHANNEL_LEN - 1);
+    _links[_link_count].topic[CACHE_CHANNEL_LEN - 1] = '\0';
+    _links[_link_count].type  = ControlLink::DOUBLE;
+    _links[_link_count].ptr.d = &var;
     _link_count++;
     return true;
 }
 
 bool MicroLabClass::linkToTopic(const char* topic, int& var) {
+    if (!topic) return false;
     if (_link_count >= CONTROL_LINK_MAX) return false;
-    _links[_link_count] = { topic, ControlLink::INT, {.i = &var} };
+    strncpy(_links[_link_count].topic, topic, CACHE_CHANNEL_LEN - 1);
+    _links[_link_count].topic[CACHE_CHANNEL_LEN - 1] = '\0';
+    _links[_link_count].type  = ControlLink::INT;
+    _links[_link_count].ptr.i = &var;
     _link_count++;
     return true;
 }
 
 int MicroLabClass::read(const char* topic, int defaultValue) const {
-    if (!_initialized) return defaultValue;
+    if (!_initialized || !topic) return defaultValue;
     double val;
     if (_cache.fetch_value(topic, val)) return (int)val;
     return defaultValue;
 }
 
 float MicroLabClass::read(const char* topic, float defaultValue) const {
-    if (!_initialized) return defaultValue;
+    if (!_initialized || !topic) return defaultValue;
     double val;
     if (_cache.fetch_value(topic, val)) return (float)val;
     return defaultValue;
 }
 
-bool MicroLabClass::received(const char* topic) const {
-    if (!_initialized) return false;
+bool MicroLabClass::received(const char* topic) {
+    if (!_initialized || !topic) return false;
     return _cache.was_received(topic);
+}
+
+bool MicroLabClass::_register_write_topic(const char* topic) {
+    if (!is_safe_string(topic)) return false;
+    if (strlen(topic) > WRITE_TOPIC_NAME_MAX_LEN) return false;
+    uint32_t h = 2166136261u;
+    for (const char* p = topic; *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; }
+    for (uint8_t i = 0; i < _write_topic_count; i++) {
+        if (_write_topic_hashes[i] == h) return true;
+    }
+    if (_write_topic_count >= WRITE_TOPIC_MAX) return false;
+    _write_topic_hashes[_write_topic_count++] = h;
+    return true;
 }
 
 static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
@@ -362,6 +442,7 @@ static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
 
 bool MicroLabClass::write(const char* topic, int data) {
     if (!_initialized) return false;
+    if (!_register_write_topic(topic)) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%d", topic, data);
     return outbound_add(_outbound, suffix);
@@ -369,6 +450,7 @@ bool MicroLabClass::write(const char* topic, int data) {
 
 bool MicroLabClass::write(const char* topic, float data) {
     if (!_initialized) return false;
+    if (!_register_write_topic(topic)) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.6g", topic, data);
     return outbound_add(_outbound, suffix);
@@ -376,6 +458,7 @@ bool MicroLabClass::write(const char* topic, float data) {
 
 bool MicroLabClass::write(const char* topic, double data) {
     if (!_initialized) return false;
+    if (!_register_write_topic(topic)) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.10g", topic, data);
     return outbound_add(_outbound, suffix);
@@ -383,6 +466,9 @@ bool MicroLabClass::write(const char* topic, double data) {
 
 bool MicroLabClass::write(const char* topic, const char* data) {
     if (!_initialized) return false;
+    if (!is_safe_string(data)) return false;
+    if (!_register_write_topic(topic)) return false;
+    if (strlen(topic) + strlen(data) + 1 >= OUTBOUND_LINE_MAX_LEN) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%s", topic, data);
     return outbound_add(_outbound, suffix);
@@ -390,49 +476,58 @@ bool MicroLabClass::write(const char* topic, const char* data) {
 
 bool MicroLabClass::turnOnCamera() {
     if (!_initialized || _camera_initialized) return _camera_initialized;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (_last_turn_on_ms != 0 && now - _last_turn_on_ms < HTTP_COOLDOWN_MS) return false;
+    _last_turn_on_ms = now;
+    drain_uart_rx();
     _camera_cmd_acked = false;
     http_send_get(Serial2, "initCamera.json");
-    if (!camera_spin_wait(5000)) return false;
-    // The firmware's ssi_initCamera has its inter-step sleep_ms calls commented
-    // out, so the ack arrives before voltage rails, power-on, and register init
-    // have settled. Give the OV5640 time to stabilize before use.
-    delay(300);
-    return true;
+    return camera_spin_wait(5000);
 }
 
 bool MicroLabClass::turnOffCamera() {
     if (!_initialized || !_camera_initialized) return true;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (_last_turn_off_ms != 0 && now - _last_turn_off_ms < HTTP_COOLDOWN_MS) return false;
+    _last_turn_off_ms = now;
+    drain_uart_rx();
     _camera_cmd_acked = false;
     http_send_get(Serial2, "powerDownCamera.json");
     return camera_spin_wait(2000);
 }
 
 bool MicroLabClass::setCameraResolution(const char* res) {
-    if (!_initialized || !_camera_initialized) return false;
+    if (!_initialized || !_camera_initialized || !res) return false;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (_last_resolution_ms != 0 && now - _last_resolution_ms < HTTP_COOLDOWN_MS) return false;
     static const char* const valid[] = {
         "96x96", "QQVGA", "QCIF",  "HQVGA",  "240x240",
         "QVGA",  "CIF",   "HVGA",  "VGA",     "SVGA",
         "XGA",   "HD",    "SXGA",  "UXGA",    "QHDA",   "WQXGA"
     };
+    uint8_t found_idx = 0;
     bool found = false;
     for (uint8_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++) {
-        if (strcmp(res, valid[i]) == 0) { found = true; break; }
+        if (strcmp(res, valid[i]) == 0) { found = true; found_idx = i; break; }
     }
     if (!found) return false;
+    _last_resolution_ms = now;
+    _camera_resolution_idx = found_idx;
+    drain_uart_rx();
     _camera_cmd_acked = false;
     char tag[HTTP_TAG_MAX_LEN];
     snprintf(tag, sizeof(tag), "setCameraSettings.json?resolution=%s", res);
     http_send_get(Serial2, tag);
-    if (!camera_spin_wait(2000)) return false;
-    // The OV5640 needs several frames for AEC/AWB to converge after a resolution
-    // change. Taking a picture immediately produces a black or underexposed frame.
-    delay(500);
-    return true;
+    return camera_spin_wait(2000);
 }
 
 bool MicroLabClass::setCameraLED(const char* mode) {
-    if (!_initialized || !_camera_initialized) return false;
+    if (!_initialized || !_camera_initialized || !mode) return false;
     if (strcmp(mode, "on") != 0 && strcmp(mode, "off") != 0 && strcmp(mode, "auto") != 0) return false;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (_last_led_ms != 0 && now - _last_led_ms < HTTP_COOLDOWN_MS) return false;
+    _last_led_ms = now;
+    drain_uart_rx();
     _camera_cmd_acked = false;
     char tag[HTTP_TAG_MAX_LEN];
     snprintf(tag, sizeof(tag), "cameraFlash.json?mode=%s", mode);
@@ -442,7 +537,15 @@ bool MicroLabClass::setCameraLED(const char* mode) {
 
 bool MicroLabClass::takePicture(uint32_t timeout_ms) {
     if (!_initialized || !_camera_initialized || _camera_busy) return false;
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    uint32_t cooldown = PICTURE_COOLDOWN_MS[_last_picture_resolution_idx];
+    if (_last_picture_ms != 0 && now - _last_picture_ms < cooldown) return false;
+    _last_picture_ms = now;
+    _last_picture_resolution_idx = _camera_resolution_idx;
+    drain_uart_rx();
     _camera_busy = true;
+    this->serial.print("Taking picture: ");
+    this->serial.println(now);
     http_send_get(Serial2, "takePicture.json");
     if (timeout_ms == 0) return true;
     // Drain UART until the firmware response clears _camera_busy. Without this,
@@ -452,6 +555,7 @@ bool MicroLabClass::takePicture(uint32_t timeout_ms) {
     while (_camera_busy) {
         while (Serial2.available()) read_serial2_byte((uint8_t)Serial2.read());
         if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) {
+            reset_state_machine();
             _camera_busy = false;
             return false;
         }
