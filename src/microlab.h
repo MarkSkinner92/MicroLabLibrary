@@ -7,6 +7,7 @@
 
 // Uncomment to hex-dump every raw byte received on Serial2 to Serial1
 // #define MICROLAB_DEBUG_SERIAL2_RX
+
 #include "command_reader.h"
 #include "control_data_cache.h"
 #include "outbound_data_cache.h"

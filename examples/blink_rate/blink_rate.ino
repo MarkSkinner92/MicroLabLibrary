@@ -2,7 +2,7 @@
 
 #define LED_BLUE 5
 
-int rate = 500;
+int rate = 100;
 
 void setup() {
     MicroLab.begin();
