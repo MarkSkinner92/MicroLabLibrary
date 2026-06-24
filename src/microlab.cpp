@@ -420,6 +420,7 @@ bool MicroLabClass::received(const char* topic) {
 
 bool MicroLabClass::_register_write_topic(const char* topic) {
     if (!is_safe_string(topic)) return false;
+    if (strcmp(topic, "camera") == 0) return false;
     if (strlen(topic) > WRITE_TOPIC_NAME_MAX_LEN) return false;
     uint32_t h = 2166136261u;
     for (const char* p = topic; *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; }
