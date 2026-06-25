@@ -159,6 +159,8 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
             MicroLab._camera_cmd_acked = true;
         } else if (strcmp(path, "/api/cameraFlash.json") == 0) {
             MicroLab._camera_cmd_acked = true;
+        } else if (strcmp(path, "/api/takeBurst.json") == 0) {
+            MicroLab._camera_cmd_acked = true;
         }
     }
     else if (command == QUEUE_DATA_COMMAND){
@@ -336,6 +338,10 @@ void MicroLabClass::doBackgroundTasks() {
     _update_links();
 
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (_burst_end_ms != 0 && now >= _burst_end_ms) {
+        _burst_end_ms = 0;
+        _camera_busy  = false;
+    }
     if (now - _last_flush_ms >= 1000) {
         _last_flush_ms = now;
         flush();
@@ -487,7 +493,7 @@ bool MicroLabClass::turnOnCamera() {
 }
 
 bool MicroLabClass::turnOffCamera() {
-    if (!_initialized || !_camera_initialized) return true;
+    if (!_initialized || !_camera_initialized || _camera_busy) return false;
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (_last_turn_off_ms != 0 && now - _last_turn_off_ms < HTTP_COOLDOWN_MS) return false;
     _last_turn_off_ms = now;
@@ -498,7 +504,7 @@ bool MicroLabClass::turnOffCamera() {
 }
 
 bool MicroLabClass::setCameraResolution(const char* res) {
-    if (!_initialized || !_camera_initialized || !res) return false;
+    if (!_initialized || !_camera_initialized || !res || _camera_busy) return false;
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (_last_resolution_ms != 0 && now - _last_resolution_ms < HTTP_COOLDOWN_MS) return false;
     static const char* const valid[] = {
@@ -523,7 +529,7 @@ bool MicroLabClass::setCameraResolution(const char* res) {
 }
 
 bool MicroLabClass::setCameraLED(const char* mode) {
-    if (!_initialized || !_camera_initialized || !mode) return false;
+    if (!_initialized || !_camera_initialized || !mode || _camera_busy) return false;
     if (strcmp(mode, "on") != 0 && strcmp(mode, "off") != 0 && strcmp(mode, "auto") != 0) return false;
     uint32_t now = to_ms_since_boot(get_absolute_time());
     if (_last_led_ms != 0 && now - _last_led_ms < HTTP_COOLDOWN_MS) return false;
@@ -561,6 +567,38 @@ bool MicroLabClass::takePicture(uint32_t timeout_ms) {
             return false;
         }
     }
+    return true;
+}
+
+bool MicroLabClass::takeBurst(int fps, int duration) {
+    if (!_initialized || !_camera_initialized || _camera_busy) return false;
+
+    // Cap duration to [1, 10]
+    if (duration < 1) duration = 1;
+    if (duration > 10) duration = 10;
+
+    // Cap fps to [1, max] based on current resolution (mirrors firmware burst_max_fps_by_res table)
+    static const uint8_t BURST_MAX_FPS[16] = {
+        30, 30, 30, 20, 20, 15, 15, 10, 8, 5, 3, 3, 2, 2, 1, 1
+    };
+    int max_fps = BURST_MAX_FPS[_camera_resolution_idx];
+    if (fps < 1) fps = 1;
+    if (fps > max_fps) fps = max_fps;
+
+    _camera_busy = true;
+    drain_uart_rx();
+    _camera_cmd_acked = false;
+    char tag[HTTP_TAG_MAX_LEN];
+    snprintf(tag, sizeof(tag), "takeBurst.json?fps=%d&duration=%d", fps, duration);
+    http_send_get(Serial2, tag);
+
+    if (!camera_spin_wait(5000)) {
+        _camera_busy = false;
+        return false;
+    }
+
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    _burst_end_ms = now + (uint32_t)(duration + 1) * 1000;
     return true;
 }
 

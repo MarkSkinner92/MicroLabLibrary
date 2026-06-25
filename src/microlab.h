@@ -58,6 +58,7 @@ public:
     bool turnOnCamera();
     bool turnOffCamera();
     bool takePicture(uint32_t timeout_ms = 5000);
+    bool takeBurst(int fps, int duration);
     bool setCameraResolution(const char* res);
     bool setCameraLED(const char* mode);  // "on", "off", or "auto"
     bool cameraReady() const;
@@ -80,6 +81,7 @@ private:
     uint32_t _last_resolution_ms = 0;
     uint32_t _last_led_ms        = 0;
     uint32_t _last_picture_ms    = 0;
+    uint32_t _burst_end_ms       = 0;  // non-zero while a burst is in flight; cleared by doBackgroundTasks()
 
     uint8_t  _camera_resolution_idx       = 4;  // index of current resolution in valid[] table (default: 240x240)
     uint8_t  _last_picture_resolution_idx = 4;  // resolution at which the last picture was taken (default: 240x240)

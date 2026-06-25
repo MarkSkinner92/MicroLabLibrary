@@ -1,0 +1,10 @@
+Make a new method, bool MicroLab.takeBurst(int fps, int duration);
+- Returns 0 if camera has not been initialized, or params are out of bounds.
+- Returns 1 if succesful
+- Blocks other requests to the camera, such as turning it off, changing resolution or taking picture for the entire duration + 1 second
+
+caps duration between 1 and 10 seconds
+caps fps based on the fps table in the MicroLab firmware
+Sends a post request via HTTP to take a burst, with fps and duration passed in.
+
+Look at the MicroLab firmware for how the takeBurst post request is to be constructed
