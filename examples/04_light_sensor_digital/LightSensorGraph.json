@@ -1,0 +1,89 @@
+{
+  "name": "LightSensorGraph",
+  "id": 1783184786630,
+  "widgets": [
+    {
+      "id": 1783185230501,
+      "type": "Graph",
+      "height": 463,
+      "modal": {
+        "display": false,
+        "settings": {
+          "title": "Light Sensor",
+          "ymin": 0,
+          "ymax": 100,
+          "ystep": "10",
+          "autoScale": false,
+          "axes": [
+            {
+              "title": "Red Level",
+              "topic_id": 64,
+              "type": "line",
+              "color": "e81515",
+              "thickness": 2,
+              "disconnectPointsGapSeconds": 10,
+              "id": 1783185230501
+            },
+            {
+              "title": "Green Level",
+              "topic_id": 65,
+              "type": "line",
+              "color": "71d873",
+              "thickness": 2,
+              "disconnectPointsGapSeconds": 10,
+              "id": 1783631499383
+            },
+            {
+              "title": "Blue Level",
+              "topic_id": 66,
+              "type": "line",
+              "color": "152ae8",
+              "thickness": 2,
+              "disconnectPointsGapSeconds": 10,
+              "id": 1783631504362
+            }
+          ],
+          "verticalAxisLabel": "Intensity %"
+        }
+      },
+      "settings": {
+        "title": "Light Sensor",
+        "ymin": 0,
+        "ymax": 100,
+        "ystep": "10",
+        "autoScale": false,
+        "axes": [
+          {
+            "title": "Red Level",
+            "topic_id": 64,
+            "type": "line",
+            "color": "e81515",
+            "thickness": 2,
+            "disconnectPointsGapSeconds": 10,
+            "id": 1783185230501
+          },
+          {
+            "title": "Green Level",
+            "topic_id": 65,
+            "type": "line",
+            "color": "71d873",
+            "thickness": 2,
+            "disconnectPointsGapSeconds": 10,
+            "id": 1783631499383
+          },
+          {
+            "title": "Blue Level",
+            "topic_id": 66,
+            "type": "line",
+            "color": "152ae8",
+            "thickness": 2,
+            "disconnectPointsGapSeconds": 10,
+            "id": 1783631504362
+          }
+        ],
+        "verticalAxisLabel": "Intensity %"
+      }
+    }
+  ],
+  "nameEditMode": false
+}

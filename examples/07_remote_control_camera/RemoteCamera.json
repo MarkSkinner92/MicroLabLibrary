@@ -1,0 +1,72 @@
+{
+  "name": "RemoteCameraControl",
+  "id": 1783638100000,
+  "widgets": [
+    {
+      "id": 1783638100001,
+      "type": "DropdownInput",
+      "valid": true,
+      "slimValue": "",
+      "valueIsValid": false,
+      "settings": {
+        "name": "Resolution",
+        "topic": "resolution",
+        "note": "Select camera capture resolution",
+        "options": [
+          { "name": "96x96", "value": "0" },
+          { "name": "QQVGA (160x120)", "value": "1" },
+          { "name": "QCIF (176x144)", "value": "2" },
+          { "name": "HQVGA (240x176)", "value": "3" },
+          { "name": "240x240", "value": "4" },
+          { "name": "QVGA (320x240)", "value": "5" },
+          { "name": "CIF (352x288)", "value": "6" },
+          { "name": "HVGA (480x320)", "value": "7" },
+          { "name": "VGA (640x480)", "value": "8" },
+          { "name": "SVGA (800x600)", "value": "9" },
+          { "name": "XGA (1024x768)", "value": "10" },
+          { "name": "HD (1280x720)", "value": "11" },
+          { "name": "SXGA (1280x1024)", "value": "12" },
+          { "name": "UXGA (1600x1200)", "value": "13" },
+          { "name": "QHDA (2560x1440)", "value": "14" },
+          { "name": "WQXGA (2560x1600)", "value": "15" }
+        ]
+      },
+      "invalidMsg": ""
+    },
+    {
+      "id": 1783638100002,
+      "type": "DropdownInput",
+      "valid": true,
+      "slimValue": "",
+      "valueIsValid": false,
+      "settings": {
+        "name": "Flash Mode",
+        "topic": "flash_mode",
+        "note": "Set camera flash behavior",
+        "options": [
+          { "name": "Off", "value": "0" },
+          { "name": "On", "value": "1" },
+          { "name": "Auto", "value": "2" }
+        ]
+      },
+      "invalidMsg": ""
+    },
+    {
+      "id": 1783638100003,
+      "type": "DropdownInput",
+      "valid": true,
+      "slimValue": "",
+      "valueIsValid": false,
+      "settings": {
+        "name": "Trigger Action",
+        "topic": "take_picture",
+        "note": "Send command to capture an image",
+        "options": [
+          { "name": "Take a picture", "value": "1" }
+        ]
+      },
+      "invalidMsg": ""
+    }
+  ],
+  "nameEditMode": false
+}

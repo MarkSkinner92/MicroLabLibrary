@@ -1,0 +1,20 @@
+{
+  "name": "02_blink_rate",
+  "id": 1783136029334,
+  "widgets": [
+    {
+      "id": 1783136639437,
+      "type": "NumericInput",
+      "valid": true,
+      "slimValue": "",
+      "valueIsValid": false,
+      "settings": {
+        "name": "Half Period (ms)",
+        "topic": "halfPeriod",
+        "note": "Milliseconds between red LED state changes"
+      },
+      "invalidMsg": ""
+    }
+  ],
+  "nameEditMode": false
+}

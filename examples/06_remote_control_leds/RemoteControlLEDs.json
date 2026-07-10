@@ -1,0 +1,51 @@
+{
+  "name": "RemoteControlLEDs",
+  "id": 1783637981692,
+  "widgets": [
+    {
+      "id": 1783637993757,
+      "type": "NumericInput",
+      "valid": true,
+      "slimValue": "",
+      "valueIsValid": false,
+      "settings": {
+        "name": "Rate",
+        "topic": "rate",
+        "note": "Milliseconds between LED state changes"
+      },
+      "invalidMsg": ""
+    },
+    {
+      "id": 1783638017676,
+      "type": "DropdownInput",
+      "valid": true,
+      "slimValue": "",
+      "valueIsValid": false,
+      "settings": {
+        "name": "Included LEDs",
+        "topic": "included_leds",
+        "note": "Change the LEDs you want to flash",
+        "options": [
+          {
+            "name": "No LEDs",
+            "value": "0"
+          },
+          {
+            "name": "Red LED Only",
+            "value": "1"
+          },
+          {
+            "name": "Green LED Only",
+            "value": "2"
+          },
+          {
+            "name": "Both LEDs",
+            "value": "3"
+          }
+        ]
+      },
+      "invalidMsg": ""
+    }
+  ],
+  "nameEditMode": false
+}
