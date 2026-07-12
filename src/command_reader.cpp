@@ -44,18 +44,31 @@ void process_incoming_byte(uint8_t b) {
             Serial1.println(" bytes");
 #endif
             if (payload_length == 0) {
+                payload[0] = '\0';
                 process_command(active_command, payload, 0);
                 reset_state_machine();
             }
         } else {
-            payload[payload_bytes_received] = (char)b;
+            // Clamp writes to the buffer: a corrupted length byte (framing
+            // desync) can claim up to 65535 bytes, which previously overran
+            // this 500-byte static buffer and corrupted adjacent RAM.
+            if (payload_bytes_received < PAYLOAD_BUFFER_SIZE - 1) {
+                payload[payload_bytes_received] = (char)b;
+            }
             payload_bytes_received++;
             if (payload_bytes_received >= payload_length) {
 #ifdef MICROLAB_DEBUG_SERIAL2_RX
                 Serial1.print("[sm] complete cmd=0x");
                 Serial1.println(active_command, HEX);
 #endif
-                process_command(active_command, payload, payload_length);
+                uint16_t stored = payload_length < PAYLOAD_BUFFER_SIZE
+                                    ? payload_length
+                                    : PAYLOAD_BUFFER_SIZE - 1;
+                // Always null-terminate: the coprocessor's length field does
+                // not include a trailing '\0', and the JSON parsers read the
+                // payload as a C string.
+                payload[stored] = '\0';
+                process_command(active_command, payload, stored);
                 reset_state_machine();
             }
         }

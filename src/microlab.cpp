@@ -56,6 +56,14 @@ uint64_t missionTimeOffset  = 0;  // Equal to missionTime  - to_ms_since_boot(ge
 static bool     missionRunning   = false;
 static uint64_t missionFrozenMs  = 0;
 
+// Absolute time sync state. The getDateRTC request/response can be lost (UART
+// RX overflow, framing desync, coprocessor busy), so doBackgroundTasks keeps
+// re-requesting until a response actually arrives.
+#define ABS_TIME_RETRY_MS 2000
+static bool     absTimeSynced        = false;
+static bool     missionTimeSynced    = false;
+static uint32_t lastAbsTimeRequestMs = 0;
+
 void syncMissionTime(uint64_t time);
 void syncAbsoluteTime(uint64_t time);
 
@@ -218,10 +226,16 @@ void MicroLabClass::begin() {
     _outbound.init();
     Serial2.setTX(PIN_UART1_TX);
     Serial2.setRX(PIN_UART1_RX);
+    // The arduino-pico default RX buffer is only 32 bytes; at 500 kbaud a
+    // single queue-data push from the coprocessor overflows it during any
+    // blocking section of user code, dropping bytes mid-packet and desyncing
+    // the framing state machine. 1 KB rides out ~16 ms of unread traffic.
+    Serial2.setFIFOSize(1024);
     Serial2.begin(500000);
     while (!Serial2);
 
     delay(1000); // Allows time for the flight computer to tell the coprocessor to update the mission time before we get it.
+    lastAbsTimeRequestMs = to_ms_since_boot(get_absolute_time());
     http_send_get(Serial2, "getDateRTC.json");
     // this->delay(100);
 }
@@ -238,12 +252,14 @@ uint64_t MicroLabClass::getAbsoluteTime(){
 void syncMissionTime(uint64_t time){
   missionTimeOffset = time - (uint64_t)to_ms_since_boot(get_absolute_time());
   MicroLab._outbound.patch_mission_times(missionTimeOffset);
-  missionRunning = true;
+  missionRunning     = true;
+  missionTimeSynced  = true;
 }
 
 void syncAbsoluteTime(uint64_t time){
   absoluteTimeOffset = time - (uint64_t)to_ms_since_boot(get_absolute_time());
   MicroLab._outbound.patch_abs_times(absoluteTimeOffset);
+  absTimeSynced = true;
 }
 
 static void writeCSVOverUART(HardwareSerial& serial, const uint8_t* csv, uint16_t csv_len) {
@@ -346,6 +362,16 @@ void MicroLabClass::doBackgroundTasks() {
         _last_flush_ms = now;
         flush();
     }
+
+    // Keep requesting the RTC date until a response actually makes it through.
+    // The single request in begin() can be lost to UART overflow or framing
+    // desync, which previously left absolute timestamps at ms-since-boot
+    // (epoch 1970) for the whole session. A successful sync also triggers a
+    // getMissionTimeRTC request via the response handler.
+    if (!absTimeSynced && now - lastAbsTimeRequestMs >= ABS_TIME_RETRY_MS) {
+        lastAbsTimeRequestMs = now;
+        http_send_get(Serial2, "getDateRTC.json");
+    }
 }
 
 void MicroLabClass::delay(uint32_t ms) {
@@ -440,11 +466,9 @@ bool MicroLabClass::_register_write_topic(const char* topic) {
 
 static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
     uint32_t t          = (uint32_t)to_ms_since_boot(get_absolute_time());
-    bool abs_synced     = (absoluteTimeOffset != 0);
-    bool mission_synced = (missionTimeOffset  != 0);
-    uint64_t abs_ms     = abs_synced     ? absoluteTimeOffset + t : t;
-    uint64_t mission_ms = mission_synced ? missionTimeOffset  + t : t;
-    return cache.add_line(suffix, t, abs_ms, mission_ms, abs_synced, mission_synced);
+    uint64_t abs_ms     = absTimeSynced     ? absoluteTimeOffset + t : t;
+    uint64_t mission_ms = missionTimeSynced ? missionTimeOffset  + t : t;
+    return cache.add_line(suffix, t, abs_ms, mission_ms, absTimeSynced, missionTimeSynced);
 }
 
 bool MicroLabClass::write(const char* topic, int data) {
