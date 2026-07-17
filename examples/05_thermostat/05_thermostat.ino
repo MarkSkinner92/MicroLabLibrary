@@ -68,6 +68,7 @@ void setup() {
     I2C_BUS.begin();
     MicroLab.begin();
     MicroLab.linkToTopic("set_temp", set_temp);
+    MicroLab.enableControlEcho();
 }
 
 void loop() {

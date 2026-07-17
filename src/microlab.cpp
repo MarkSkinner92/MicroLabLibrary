@@ -15,6 +15,16 @@
 
 #define HTTP_COOLDOWN_MS        1000
 #define WRITE_TOPIC_NAME_MAX_LEN  64
+#define CONTROL_ECHO_TOPIC "control_echo"
+// Literal two-character escape (backslash, n) — NOT an actual newline byte.
+// A real '\n' would fail is_safe_string() and, if it somehow got through,
+// would split one CSV row into several malformed rows once the coprocessor
+// writes it verbatim to the SD card.
+#define CONTROL_ECHO_SEP     "\\n"
+#define CONTROL_ECHO_SEP_LEN (sizeof(CONTROL_ECHO_SEP) - 1)
+// Largest `data` payload write(CONTROL_ECHO_TOPIC, data) will accept, derived
+// from the same check _write_char_at makes: strlen(topic)+strlen(data)+1 < OUTBOUND_LINE_MAX_LEN.
+#define CONTROL_ECHO_MAX_BODY_LEN (OUTBOUND_LINE_MAX_LEN - (int)(sizeof(CONTROL_ECHO_TOPIC) - 1) - 2)
 
 // Minimum time between pictures, indexed by resolution (matches valid[] in setCameraResolution).
 // Cooldown is applied based on the resolution of the LAST picture taken, not the current one.
@@ -174,6 +184,9 @@ void process_command(uint8_t command, char* payload, uint16_t length) {
     else if (command == QUEUE_DATA_COMMAND){
         payload[length] = '\0';
         MicroLab._cache.update_from_json(payload);
+        if (MicroLab._control_echo_enabled) {
+            MicroLab._echo_control_data();
+        }
     }
     else if (command == MISSION_START_COMMAND ||
              command == MISSION_STOP_COMMAND  ||
@@ -464,11 +477,18 @@ bool MicroLabClass::_register_write_topic(const char* topic) {
     return true;
 }
 
-static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
-    uint32_t t          = (uint32_t)to_ms_since_boot(get_absolute_time());
+// t is the raw boot-ms tick this line is timestamped at. Passing distinct
+// values for a batch of lines (rather than always sampling "now") keeps them
+// distinguishable after patch_abs_times()/patch_mission_times() too, since
+// those recompute from this same raw_millis once a sync arrives.
+static bool outbound_add_at(outbound_data_cache& cache, const char* suffix, uint32_t t) {
     uint64_t abs_ms     = absTimeSynced     ? absoluteTimeOffset + t : t;
     uint64_t mission_ms = missionTimeSynced ? missionTimeOffset  + t : t;
     return cache.add_line(suffix, t, abs_ms, mission_ms, absTimeSynced, missionTimeSynced);
+}
+
+static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
+    return outbound_add_at(cache, suffix, (uint32_t)to_ms_since_boot(get_absolute_time()));
 }
 
 bool MicroLabClass::write(const char* topic, int data) {
@@ -495,14 +515,82 @@ bool MicroLabClass::write(const char* topic, double data) {
     return outbound_add(_outbound, suffix);
 }
 
-bool MicroLabClass::write(const char* topic, const char* data) {
+bool MicroLabClass::_write_char_at(const char* topic, const char* data, uint32_t t) {
     if (!_initialized) return false;
     if (!is_safe_string(data)) return false;
     if (!_register_write_topic(topic)) return false;
     if (strlen(topic) + strlen(data) + 1 >= OUTBOUND_LINE_MAX_LEN) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%s", topic, data);
-    return outbound_add(_outbound, suffix);
+    return outbound_add_at(_outbound, suffix, t);
+}
+
+bool MicroLabClass::write(const char* topic, const char* data) {
+    return _write_char_at(topic, data, (uint32_t)to_ms_since_boot(get_absolute_time()));
+}
+
+uint8_t MicroLabClass::_echo_control_data() {
+    if (!_initialized) return 0;
+
+    // Pack as many "channel: value" lines as fit (joined by CONTROL_ECHO_SEP)
+    // into a single control_echo data point. Once the next line wouldn't fit,
+    // flush the point, bump the timestamp 2ms, and start a new one — so
+    // points stay distinguishable from each other without needing a
+    // separate timestamp per topic.
+    uint32_t t = (uint32_t)to_ms_since_boot(get_absolute_time());
+    uint8_t sent = 0;
+
+    char    body[CONTROL_ECHO_MAX_BODY_LEN + 1];
+    size_t  body_len   = 0;
+    uint8_t body_count = 0;
+
+    for (uint8_t i = 0; i < _cache.count(); i++) {
+        const char* channel;
+        double value;
+        bool received;
+        if (!_cache.get_at(i, channel, value, received)) continue;
+        if (!received) continue;  // only echo topics that arrived in the packet that triggered this pass
+
+        // "channel: value" — channel is at most CACHE_CHANNEL_LEN-1 (20) chars,
+        // value at most ~18 chars for %.10g; 64 leaves ample margin.
+        char line[64];
+        int n = snprintf(line, sizeof(line), "%s: %.10g", channel, value);
+        if (n <= 0) continue;
+        size_t line_len = (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1;
+
+        size_t sep_len = body_len ? CONTROL_ECHO_SEP_LEN : 0;
+        if (body_len != 0 && body_len + sep_len + line_len > CONTROL_ECHO_MAX_BODY_LEN) {
+            body[body_len] = '\0';
+            if (_write_char_at(CONTROL_ECHO_TOPIC, body, t)) sent += body_count;
+            t += 2;
+            body_len   = 0;
+            body_count = 0;
+            sep_len    = 0;
+        }
+
+        if (line_len > CONTROL_ECHO_MAX_BODY_LEN) continue; // shouldn't happen: one line always fits an empty pack
+
+        if (sep_len) {
+            memcpy(body + body_len, CONTROL_ECHO_SEP, sep_len);
+            body_len += sep_len;
+        }
+        memcpy(body + body_len, line, line_len);
+        body_len += line_len;
+        body_count++;
+    }
+
+    if (body_len != 0) {
+        body[body_len] = '\0';
+        if (_write_char_at(CONTROL_ECHO_TOPIC, body, t)) sent += body_count;
+    }
+
+    return sent;
+}
+
+uint8_t MicroLabClass::enableControlEcho() {
+    if (!_initialized) return 0;
+    _control_echo_enabled = true;
+    return _echo_control_data();
 }
 
 bool MicroLabClass::turnOnCamera() {

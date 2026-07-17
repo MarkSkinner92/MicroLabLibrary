@@ -16,6 +16,7 @@ public:
     void update_from_json(char* json); // NOTE: mutates json buffer (tiny-json)
     bool fetch_value(const char* channel, double& out) const;
     bool was_received(const char* channel);
+    bool get_at(uint8_t index, const char*& channel, double& value, bool& received) const;
     uint8_t count() const { return _count; }
     void clear() { _count = 0; }
 

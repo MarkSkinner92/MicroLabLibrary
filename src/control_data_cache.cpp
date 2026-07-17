@@ -71,6 +71,17 @@ bool control_data_cache::was_received(const char* channel) {
     return false;
 }
 
+// Read-only peek — unlike was_received(), does not clear the received flag,
+// so it doesn't interfere with the caller's own received()/was_received()
+// checks on the same topics.
+bool control_data_cache::get_at(uint8_t index, const char*& channel, double& value, bool& received) const {
+    if (index >= _count) return false;
+    channel  = _cache[index].channel;
+    value    = _cache[index].value;
+    received = _cache[index].received;
+    return true;
+}
+
 bool control_data_cache::fetch_value(const char* channel, double& out) const {
     for (uint8_t i = 0; i < _count; i++) {
         if (strncmp(_cache[i].channel, channel, CACHE_CHANNEL_LEN) == 0) {

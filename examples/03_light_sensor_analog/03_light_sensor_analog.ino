@@ -19,6 +19,7 @@ bool above90LastTime = false;
 void setup() {
     MicroLab.begin();
     MicroLab.beginDebugSerial(115200);
+    MicroLab.enableControlEcho();
 }
 
 void loop() {
@@ -36,6 +37,6 @@ void loop() {
       MicroLab.write("above_90_warning", "Light levels > 90%");
     }
 
-    MicroLab.delay(500);
+    MicroLab.delay(100);
     above90LastTime = isAbove90;
 }

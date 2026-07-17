@@ -55,6 +55,31 @@ public:
     bool write(const char* topic, double data);
     bool write(const char* topic, const char* data);
 
+    // Enables the control-data echo (like linkToTopic, but for the whole
+    // cache) and immediately performs one echo pass on the "control_echo"
+    // topic, republishing only the topics that arrived in the most recent
+    // queue-data packet (not the whole cache — topics from earlier packets
+    // that weren't refreshed this time are skipped). Packs as many "<name>:
+    // <value>" lines as fit (joined by a literal "\n" escape — not a real
+    // newline byte, which would corrupt the CSV row) into one data point;
+    // once a point is full, starts a new one 2ms later so consecutive
+    // points stay distinguishable. From then on, every incoming queue-data
+    // packet automatically re-echoes just its own topics — no further
+    // calls needed. Idempotent — calling again just performs another
+    // immediate pass (over whichever topics were freshest as of the last
+    // packet).
+    // Returns the number of topics successfully packed and queued THIS
+    // call; if it's less than the number of topics in that packet, the
+    // outbound cache (OUTBOUND_CACHE_MAX_LINES, 20 lines) filled up before
+    // the next flush() and the remainder were dropped.
+    uint8_t enableControlEcho();
+
+    // Does the packing/write loop only, no registration. Used by
+    // enableControlEcho() and by process_command()'s auto-fire on every
+    // incoming queue-data packet. Echoes only topics currently flagged
+    // "received" (i.e. present in the packet just processed).
+    uint8_t _echo_control_data();
+
     bool turnOnCamera();
     bool turnOffCamera();
     bool takePicture(uint32_t timeout_ms = 5000);
@@ -68,6 +93,9 @@ public:
     bool _camera_initialized;
     bool _camera_cmd_acked;
     bool _camera_busy;
+    // Set by enableControlEcho(); read directly by process_command() (free
+    // function in microlab.cpp), same convention as _cache/_camera_* above.
+    bool _control_echo_enabled = false;
 
 private:
     bool        _initialized = false;
@@ -91,6 +119,10 @@ private:
 
     void _update_links();
     bool _register_write_topic(const char* topic);
+    // Shared implementation of write(topic, const char*), parameterized on
+    // the raw boot-ms tick so callers (e.g. _echo_control_data) can space
+    // out timestamps within a batch instead of sampling "now" every call.
+    bool _write_char_at(const char* topic, const char* data, uint32_t t);
 };
 
 extern MicroLabClass MicroLab;
