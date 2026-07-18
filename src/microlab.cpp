@@ -3,6 +3,9 @@
 #include "http_request_helper.h"
 #include <Arduino.h>
 #include "pico/time.h"
+#include <cctype>
+#include <cstdarg>
+#include <cstdio>
 
 #define PIN_UART1_TX  20
 #define PIN_UART1_RX  21
@@ -53,6 +56,18 @@ static bool is_safe_string(const char* s) {
     if (!s) return false;
     for (const char* p = s; *p; p++) {
         if (*p == ',' || *p == '\n' || *p == '\r') return false;
+    }
+    return true;
+}
+
+// Returns false if topic is NULL/empty, starts with a digit, or contains
+// anything other than letters, digits, underscores, and dashes (no
+// whitespace or other special characters).
+static bool is_valid_topic_name(const char* topic) {
+    if (!topic || !*topic) return false;
+    if (isdigit((unsigned char)*topic)) return false;
+    for (const char* p = topic; *p; p++) {
+        if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') return false;
     }
     return true;
 }
@@ -215,6 +230,18 @@ void MicroLabClass::beginDebugSerial(uint32_t baud) {
     Serial1.setTX(0);
     Serial1.setRX(1);
     Serial1.begin(baud);
+    _debug_enabled = true;
+}
+
+void MicroLabClass::_apiWarn(const char* fmt, ...) const {
+    if (!_debug_enabled) return;
+    char msg[160];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, args);
+    va_end(args);
+    serial.print("[API_WARN] ");
+    serial.println(msg);
 }
 
 void MicroLabClass::begin() {
@@ -395,7 +422,14 @@ void MicroLabClass::delay(uint32_t ms) {
 }
 
 bool MicroLabClass::receiveData(const char* channel, double& out) const {
-    if (!_initialized || !channel) return false;
+    if (!_initialized) {
+        _apiWarn("receiveData(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!channel) {
+        _apiWarn("receiveData(): channel is NULL");
+        return false;
+    }
     return _cache.fetch_value(channel, out);
 }
 
@@ -412,8 +446,14 @@ void MicroLabClass::_update_links() {
 }
 
 bool MicroLabClass::linkToTopic(const char* topic, float& var) {
-    if (!topic) return false;
-    if (_link_count >= CONTROL_LINK_MAX) return false;
+    if (!topic) {
+        _apiWarn("linkToTopic(): topic is NULL");
+        return false;
+    }
+    if (_link_count >= CONTROL_LINK_MAX) {
+        _apiWarn("linkToTopic('%s'): link table full (max %d links)", topic, CONTROL_LINK_MAX);
+        return false;
+    }
     strncpy(_links[_link_count].topic, topic, CACHE_CHANNEL_LEN - 1);
     _links[_link_count].topic[CACHE_CHANNEL_LEN - 1] = '\0';
     _links[_link_count].type  = ControlLink::FLOAT;
@@ -423,8 +463,14 @@ bool MicroLabClass::linkToTopic(const char* topic, float& var) {
 }
 
 bool MicroLabClass::linkToTopic(const char* topic, double& var) {
-    if (!topic) return false;
-    if (_link_count >= CONTROL_LINK_MAX) return false;
+    if (!topic) {
+        _apiWarn("linkToTopic(): topic is NULL");
+        return false;
+    }
+    if (_link_count >= CONTROL_LINK_MAX) {
+        _apiWarn("linkToTopic('%s'): link table full (max %d links)", topic, CONTROL_LINK_MAX);
+        return false;
+    }
     strncpy(_links[_link_count].topic, topic, CACHE_CHANNEL_LEN - 1);
     _links[_link_count].topic[CACHE_CHANNEL_LEN - 1] = '\0';
     _links[_link_count].type  = ControlLink::DOUBLE;
@@ -434,8 +480,14 @@ bool MicroLabClass::linkToTopic(const char* topic, double& var) {
 }
 
 bool MicroLabClass::linkToTopic(const char* topic, int& var) {
-    if (!topic) return false;
-    if (_link_count >= CONTROL_LINK_MAX) return false;
+    if (!topic) {
+        _apiWarn("linkToTopic(): topic is NULL");
+        return false;
+    }
+    if (_link_count >= CONTROL_LINK_MAX) {
+        _apiWarn("linkToTopic('%s'): link table full (max %d links)", topic, CONTROL_LINK_MAX);
+        return false;
+    }
     strncpy(_links[_link_count].topic, topic, CACHE_CHANNEL_LEN - 1);
     _links[_link_count].topic[CACHE_CHANNEL_LEN - 1] = '\0';
     _links[_link_count].type  = ControlLink::INT;
@@ -459,20 +511,43 @@ float MicroLabClass::read(const char* topic, float defaultValue) const {
 }
 
 bool MicroLabClass::received(const char* topic) {
-    if (!_initialized || !topic) return false;
+    if (!_initialized) {
+        _apiWarn("received(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!topic) {
+        _apiWarn("received(): topic is NULL");
+        return false;
+    }
     return _cache.was_received(topic);
 }
 
 bool MicroLabClass::_register_write_topic(const char* topic) {
-    if (!is_safe_string(topic)) return false;
-    if (strcmp(topic, "camera") == 0) return false;
-    if (strlen(topic) > WRITE_TOPIC_NAME_MAX_LEN) return false;
+    if (!topic || !*topic) {
+        _apiWarn("write(): topic name is NULL or empty");
+        return false;
+    }
+    if (!is_valid_topic_name(topic)) {
+        _apiWarn("write(): invalid topic name '%s' - must start with a letter and contain only letters, digits, '_' or '-'", topic);
+        return false;
+    }
+    if (strcmp(topic, "camera") == 0) {
+        _apiWarn("write(): 'camera' is a reserved topic name");
+        return false;
+    }
+    if (strlen(topic) > WRITE_TOPIC_NAME_MAX_LEN) {
+        _apiWarn("write(): topic name '%s' exceeds max length of %d characters", topic, WRITE_TOPIC_NAME_MAX_LEN);
+        return false;
+    }
     uint32_t h = 2166136261u;
     for (const char* p = topic; *p; p++) { h ^= (uint8_t)*p; h *= 16777619u; }
     for (uint8_t i = 0; i < _write_topic_count; i++) {
         if (_write_topic_hashes[i] == h) return true;
     }
-    if (_write_topic_count >= WRITE_TOPIC_MAX) return false;
+    if (_write_topic_count >= WRITE_TOPIC_MAX) {
+        _apiWarn("write(): cannot register topic '%s' - max of %d distinct write topics already registered", topic, WRITE_TOPIC_MAX);
+        return false;
+    }
     _write_topic_hashes[_write_topic_count++] = h;
     return true;
 }
@@ -492,37 +567,63 @@ static bool outbound_add(outbound_data_cache& cache, const char* suffix) {
 }
 
 bool MicroLabClass::write(const char* topic, int data) {
-    if (!_initialized) return false;
+    if (!_initialized) {
+        _apiWarn("write(): MicroLab.begin() has not been called yet");
+        return false;
+    }
     if (!_register_write_topic(topic)) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%d", topic, data);
-    return outbound_add(_outbound, suffix);
+    bool ok = outbound_add(_outbound, suffix);
+    if (!ok) _apiWarn("write('%s'): outbound cache is full (max %d lines)", topic, OUTBOUND_CACHE_MAX_LINES);
+    return ok;
 }
 
 bool MicroLabClass::write(const char* topic, float data) {
-    if (!_initialized) return false;
+    if (!_initialized) {
+        _apiWarn("write(): MicroLab.begin() has not been called yet");
+        return false;
+    }
     if (!_register_write_topic(topic)) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.6g", topic, data);
-    return outbound_add(_outbound, suffix);
+    bool ok = outbound_add(_outbound, suffix);
+    if (!ok) _apiWarn("write('%s'): outbound cache is full (max %d lines)", topic, OUTBOUND_CACHE_MAX_LINES);
+    return ok;
 }
 
 bool MicroLabClass::write(const char* topic, double data) {
-    if (!_initialized) return false;
+    if (!_initialized) {
+        _apiWarn("write(): MicroLab.begin() has not been called yet");
+        return false;
+    }
     if (!_register_write_topic(topic)) return false;
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%.10g", topic, data);
-    return outbound_add(_outbound, suffix);
+    bool ok = outbound_add(_outbound, suffix);
+    if (!ok) _apiWarn("write('%s'): outbound cache is full (max %d lines)", topic, OUTBOUND_CACHE_MAX_LINES);
+    return ok;
 }
 
 bool MicroLabClass::_write_char_at(const char* topic, const char* data, uint32_t t) {
-    if (!_initialized) return false;
-    if (!is_safe_string(data)) return false;
+    if (!_initialized) {
+        _apiWarn("write(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!is_safe_string(data)) {
+        _apiWarn("write('%s'): data contains a comma, newline, or carriage return", topic ? topic : "(null)");
+        return false;
+    }
     if (!_register_write_topic(topic)) return false;
-    if (strlen(topic) + strlen(data) + 1 >= OUTBOUND_LINE_MAX_LEN) return false;
+    if (strlen(topic) + strlen(data) + 1 >= OUTBOUND_LINE_MAX_LEN) {
+        _apiWarn("write('%s'): topic + data too long to fit in one line (max %d characters combined)", topic, OUTBOUND_LINE_MAX_LEN);
+        return false;
+    }
     char suffix[OUTBOUND_LINE_MAX_LEN];
     snprintf(suffix, sizeof(suffix), "%s,%s", topic, data);
-    return outbound_add_at(_outbound, suffix, t);
+    bool ok = outbound_add_at(_outbound, suffix, t);
+    if (!ok) _apiWarn("write('%s'): outbound cache is full (max %d lines)", topic, OUTBOUND_CACHE_MAX_LINES);
+    return ok;
 }
 
 bool MicroLabClass::write(const char* topic, const char* data) {
@@ -594,31 +695,74 @@ uint8_t MicroLabClass::enableControlEcho() {
 }
 
 bool MicroLabClass::turnOnCamera() {
-    if (!_initialized || _camera_initialized) return _camera_initialized;
+    if (_camera_initialized) return true;  // already on
+    if (!_initialized) {
+        _apiWarn("turnOnCamera(): MicroLab.begin() has not been called yet");
+        return false;
+    }
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (_last_turn_on_ms != 0 && now - _last_turn_on_ms < HTTP_COOLDOWN_MS) return false;
+    if (_last_turn_on_ms != 0 && now - _last_turn_on_ms < HTTP_COOLDOWN_MS) {
+        _apiWarn("turnOnCamera(): cooldown active, %lu ms remaining", (unsigned long)(HTTP_COOLDOWN_MS - (now - _last_turn_on_ms)));
+        return false;
+    }
     _last_turn_on_ms = now;
     drain_uart_rx();
     _camera_cmd_acked = false;
     http_send_get(Serial2, "initCamera.json");
-    return camera_spin_wait(5000);
+    bool ok = camera_spin_wait(5000);
+    if (!ok) _apiWarn("turnOnCamera(): no acknowledgment from coprocessor (timed out after 5000 ms)");
+    return ok;
 }
 
 bool MicroLabClass::turnOffCamera() {
-    if (!_initialized || !_camera_initialized || _camera_busy) return false;
+    if (!_initialized) {
+        _apiWarn("turnOffCamera(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!_camera_initialized) {
+        _apiWarn("turnOffCamera(): camera is not on");
+        return false;
+    }
+    if (_camera_busy) {
+        _apiWarn("turnOffCamera(): camera is busy (picture/burst in progress)");
+        return false;
+    }
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (_last_turn_off_ms != 0 && now - _last_turn_off_ms < HTTP_COOLDOWN_MS) return false;
+    if (_last_turn_off_ms != 0 && now - _last_turn_off_ms < HTTP_COOLDOWN_MS) {
+        _apiWarn("turnOffCamera(): cooldown active, %lu ms remaining", (unsigned long)(HTTP_COOLDOWN_MS - (now - _last_turn_off_ms)));
+        return false;
+    }
     _last_turn_off_ms = now;
     drain_uart_rx();
     _camera_cmd_acked = false;
     http_send_get(Serial2, "powerDownCamera.json");
-    return camera_spin_wait(2000);
+    bool ok = camera_spin_wait(2000);
+    if (!ok) _apiWarn("turnOffCamera(): no acknowledgment from coprocessor (timed out after 2000 ms)");
+    return ok;
 }
 
 bool MicroLabClass::setCameraResolution(const char* res) {
-    if (!_initialized || !_camera_initialized || !res || _camera_busy) return false;
+    if (!_initialized) {
+        _apiWarn("setCameraResolution(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!_camera_initialized) {
+        _apiWarn("setCameraResolution(): camera must be turned on first");
+        return false;
+    }
+    if (!res) {
+        _apiWarn("setCameraResolution(): resolution string is NULL");
+        return false;
+    }
+    if (_camera_busy) {
+        _apiWarn("setCameraResolution(): camera is busy (picture/burst in progress)");
+        return false;
+    }
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (_last_resolution_ms != 0 && now - _last_resolution_ms < HTTP_COOLDOWN_MS) return false;
+    if (_last_resolution_ms != 0 && now - _last_resolution_ms < HTTP_COOLDOWN_MS) {
+        _apiWarn("setCameraResolution(): cooldown active, %lu ms remaining", (unsigned long)(HTTP_COOLDOWN_MS - (now - _last_resolution_ms)));
+        return false;
+    }
     static const char* const valid[] = {
         "96x96", "QQVGA", "QCIF",  "HQVGA",  "240x240",
         "QVGA",  "CIF",   "HVGA",  "VGA",     "SVGA",
@@ -629,7 +773,10 @@ bool MicroLabClass::setCameraResolution(const char* res) {
     for (uint8_t i = 0; i < sizeof(valid) / sizeof(valid[0]); i++) {
         if (strcmp(res, valid[i]) == 0) { found = true; found_idx = i; break; }
     }
-    if (!found) return false;
+    if (!found) {
+        _apiWarn("setCameraResolution(): '%s' is not a valid resolution", res);
+        return false;
+    }
     _last_resolution_ms = now;
     _camera_resolution_idx = found_idx;
     drain_uart_rx();
@@ -637,28 +784,63 @@ bool MicroLabClass::setCameraResolution(const char* res) {
     char tag[HTTP_TAG_MAX_LEN];
     snprintf(tag, sizeof(tag), "setCameraSettings.json?resolution=%s", res);
     http_send_get(Serial2, tag);
-    return camera_spin_wait(2000);
+    bool ok = camera_spin_wait(2000);
+    if (!ok) _apiWarn("setCameraResolution(): no acknowledgment from coprocessor (timed out after 2000 ms)");
+    return ok;
 }
 
 bool MicroLabClass::setCameraLED(const char* mode) {
-    if (!_initialized || !_camera_initialized || !mode || _camera_busy) return false;
-    if (strcmp(mode, "on") != 0 && strcmp(mode, "off") != 0 && strcmp(mode, "auto") != 0) return false;
+    if (!_initialized) {
+        _apiWarn("setCameraLED(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!mode) {
+        _apiWarn("setCameraLED(): mode is NULL");
+        return false;
+    }
+    if (_camera_busy) {
+        _apiWarn("setCameraLED(): camera is busy (picture/burst in progress)");
+        return false;
+    }
+    if (strcmp(mode, "on") != 0 && strcmp(mode, "off") != 0 && strcmp(mode, "auto") != 0) {
+        _apiWarn("setCameraLED(): '%s' is not a valid mode (use \"on\", \"off\", or \"auto\")", mode);
+        return false;
+    }
     uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (_last_led_ms != 0 && now - _last_led_ms < HTTP_COOLDOWN_MS) return false;
+    if (_last_led_ms != 0 && now - _last_led_ms < HTTP_COOLDOWN_MS) {
+        _apiWarn("setCameraLED(): cooldown active, %lu ms remaining", (unsigned long)(HTTP_COOLDOWN_MS - (now - _last_led_ms)));
+        return false;
+    }
     _last_led_ms = now;
     drain_uart_rx();
     _camera_cmd_acked = false;
     char tag[HTTP_TAG_MAX_LEN];
     snprintf(tag, sizeof(tag), "cameraFlash.json?mode=%s", mode);
     http_send_get(Serial2, tag);
-    return camera_spin_wait(2000);
+    bool ok = camera_spin_wait(2000);
+    if (!ok) _apiWarn("setCameraLED(): no acknowledgment from coprocessor (timed out after 2000 ms)");
+    return ok;
 }
 
 bool MicroLabClass::takePicture(uint32_t timeout_ms) {
-    if (!_initialized || !_camera_initialized || _camera_busy) return false;
+    if (!_initialized) {
+        _apiWarn("takePicture(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!_camera_initialized) {
+        _apiWarn("takePicture(): camera must be turned on first");
+        return false;
+    }
+    if (_camera_busy) {
+        _apiWarn("takePicture(): camera is busy (picture/burst already in progress)");
+        return false;
+    }
     uint32_t now = to_ms_since_boot(get_absolute_time());
     uint32_t cooldown = PICTURE_COOLDOWN_MS[_last_picture_resolution_idx];
-    if (_last_picture_ms != 0 && now - _last_picture_ms < cooldown) return false;
+    if (_last_picture_ms != 0 && now - _last_picture_ms < cooldown) {
+        _apiWarn("takePicture(): cooldown active for current resolution, %lu ms remaining", (unsigned long)(cooldown - (now - _last_picture_ms)));
+        return false;
+    }
     _last_picture_ms = now;
     _last_picture_resolution_idx = _camera_resolution_idx;
     drain_uart_rx();
@@ -676,6 +858,7 @@ bool MicroLabClass::takePicture(uint32_t timeout_ms) {
         if (to_ms_since_boot(get_absolute_time()) - t0 > timeout_ms) {
             reset_state_machine();
             _camera_busy = false;
+            _apiWarn("takePicture(): no response from camera coprocessor (timed out after %lu ms)", (unsigned long)timeout_ms);
             return false;
         }
     }
@@ -683,7 +866,18 @@ bool MicroLabClass::takePicture(uint32_t timeout_ms) {
 }
 
 bool MicroLabClass::takeBurst(int fps, int duration) {
-    if (!_initialized || !_camera_initialized || _camera_busy) return false;
+    if (!_initialized) {
+        _apiWarn("takeBurst(): MicroLab.begin() has not been called yet");
+        return false;
+    }
+    if (!_camera_initialized) {
+        _apiWarn("takeBurst(): camera must be turned on first");
+        return false;
+    }
+    if (_camera_busy) {
+        _apiWarn("takeBurst(): camera is busy (picture/burst already in progress)");
+        return false;
+    }
 
     // Cap duration to [1, 10]
     if (duration < 1) duration = 1;
@@ -706,6 +900,7 @@ bool MicroLabClass::takeBurst(int fps, int duration) {
 
     if (!camera_spin_wait(5000)) {
         _camera_busy = false;
+        _apiWarn("takeBurst(): no acknowledgment from coprocessor (timed out after 5000 ms)");
         return false;
     }
 

@@ -27,9 +27,10 @@ struct ControlLink {
 
 class MicroLabClass {
 public:
-    MicroLabClass() : serial(Serial1) {}
+    MicroLabClass() : serial(Serial1), Serial(Serial1) {}
 
     HardwareSerial& serial;  // alias for Serial1 — use MicroLab.serial.print(...)
+    HardwareSerial& Serial;  // same as serial, capitalized to match Arduino's Serial.print(...) convention
 
     void begin();
     void beginDebugSerial(uint32_t baud = 115200);
@@ -117,12 +118,20 @@ private:
     uint32_t _write_topic_hashes[WRITE_TOPIC_MAX];
     uint8_t  _write_topic_count  = 0;
 
+    bool _debug_enabled = false;  // set by beginDebugSerial(); gates _apiWarn() output
+
     void _update_links();
     bool _register_write_topic(const char* topic);
     // Shared implementation of write(topic, const char*), parameterized on
     // the raw boot-ms tick so callers (e.g. _echo_control_data) can space
     // out timestamps within a batch instead of sampling "now" every call.
     bool _write_char_at(const char* topic, const char* data, uint32_t t);
+
+    // Prints "[API_WARN] " + the formatted message to `serial`, but only if
+    // beginDebugSerial() has been called — surfaces the many silent-failure
+    // points (invalid topic name, camera cooldown/not-on, etc.) without
+    // adding overhead or requiring a wired-up debug UART on every user.
+    void _apiWarn(const char* fmt, ...) const;
 };
 
 extern MicroLabClass MicroLab;
