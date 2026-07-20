@@ -176,9 +176,6 @@ All camera methods except `cameraReady()` require `turnOnCamera()` to have alrea
 | 10 | `XGA` | 1024×768 | 35 s |
 | 11 | `HD` | 1280×720 | 40 s |
 | 12 | `SXGA` | 1280×1024 | 45 s |
-| 13 | `UXGA` | 1600×1200 | 50 s |
-| 14 | `QHDA` | 2560×1440 | 55 s |
-| 15 | `WQXGA` | 2560×1600 | 60 s |
 
 Pass the name string (e.g. `"VGA"`) to `setCameraResolution()`. The cooldown applies based on the resolution of the *last* picture taken, not the one you're switching to.
 
@@ -199,6 +196,3 @@ Pass the name string (e.g. `"VGA"`) to `setCameraResolution()`. The cooldown app
 | 10 | `XGA` | 3 |
 | 11 | `HD` | 3 |
 | 12 | `SXGA` | 2 |
-| 13 | `UXGA` | 2 |
-| 14 | `QHDA` | 1 |
-| 15 | `WQXGA` | 1 |
